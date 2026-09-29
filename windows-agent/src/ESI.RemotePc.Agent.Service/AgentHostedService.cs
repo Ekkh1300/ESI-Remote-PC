@@ -142,9 +142,18 @@ public sealed class AgentHostedService(
         limiter.UnauthenticatedBurst = Math.Clamp(security.UnauthenticatedBurst, 1, 100_000);
         limiter.PairingPerHour = Math.Clamp(security.PairingPerHour, 1, 10_000);
 
+        // The poll budget is computed from the protocol rather than configured. A phone is
+        // told to poll every pollIntervalMs for pairingWindowSeconds, and the endpoint it
+        // polls is unauthenticated, so the budget has to be at least that or the agent
+        // breaks the protocol it just advertised. Deriving it means changing either
+        // constant cannot silently make pairing impossible again.
+        limiter.PairingPollsPerMinute = RateLimiter.RequiredPairingPollsPerMinute(
+            security.PairingWindowSeconds, ProtocolConstants.PairingPollIntervalMs);
+
         // The burst never exceeds the sustained rate. A bucket that can hold more than the
         // minute can produce would hand out a burst no amount of waiting has earned.
         limiter.PairingBurst = Math.Min(limiter.PairingBurst, limiter.PairingPerHour);
+        limiter.PairingPollBurst = Math.Min(limiter.PairingPollBurst, limiter.PairingPollsPerMinute);
         limiter.Burst = Math.Min(limiter.Burst, limiter.RequestsPerMinute);
     }
 

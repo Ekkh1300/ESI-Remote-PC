@@ -511,6 +511,20 @@ internal static class ServiceManager
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 ProtocolConstants.DataDirectoryName);
 
+    /// <summary>
+    /// Resolves the data directory, honouring an explicit <c>--data-dir</c>.
+    /// <para>
+    /// The agent takes <c>--data-dir</c> and the CLI did not, so the only way to point the
+    /// CLI at the same database as a console agent was to override the <c>PROGRAMDATA</c>
+    /// environment variable. That works but it is a trap: the agent's own resolver reads the
+    /// registry through <c>GetFolderPath</c> and ignores <c>PROGRAMDATA</c>, so a process
+    /// launched with that variable pointed the two at different databases. An explicit flag
+    /// is unambiguous, and it is what the smoke test and the live-agent check both need.
+    /// </para>
+    /// </summary>
+    public static string ResolveDataDirectory(string? explicitPath)
+        => string.IsNullOrWhiteSpace(explicitPath) ? ResolveDataDirectory() : explicitPath.Trim();
+
     private static CommandResult RunSc(params string[] arguments) => RunScRaw(string.Join(' ', arguments));
 
     private static CommandResult RunScRaw(string arguments)

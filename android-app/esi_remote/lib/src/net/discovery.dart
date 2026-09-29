@@ -62,8 +62,8 @@ class DiscoveredAgent {
       ? handshake.deviceName
       : (handshake.hostName.isNotEmpty ? handshake.hostName : host);
   String get spkiPin => handshake.spkiSha256 ?? '';
-  String get displayAddress =>
-      port == EsiProtocol.defaultHttpsPort ? host : '$host:$port';
+  /// Always includes the port, for the same reason as `EsiEndpoint.authority`.
+  String get displayAddress => EsiProtocol.authority(host, port);
 
   /// Stable key for de-duplication across the three discovery channels.
   String get key => deviceId.isNotEmpty ? deviceId : displayAddress;
@@ -289,8 +289,11 @@ class LanDiscovery {
       ..connectionTimeout = handshakeTimeout
       ..badCertificateCallback = (cert, host, port) => true;
     try {
-      final authority = port == EsiProtocol.defaultHttpsPort ? host : '$host:$port';
-      final request = await client.getUrl(Uri.parse('https://$authority${EsiProtocol.apiBase}/handshake'));
+      // The port is always spelled out: an https URL with no port means 443, and the
+      // agent does not listen there. See `EsiProtocol.authority`.
+      final authority = EsiProtocol.authority(host, port);
+      final request =
+          await client.getUrl(Uri.parse('https://$authority${EsiProtocol.apiBase}/handshake'));
       final response = await request.close().timeout(handshakeTimeout);
       if (response.statusCode != 200) return null;
       final body = await response.transform(utf8.decoder).join().timeout(handshakeTimeout);

@@ -73,7 +73,7 @@ what should be fixed first.
 
 | # | Defect | Location | Effect |
 |---|---|---|---|
-| **D1** | **No pairing QR emitter exists.** `PairingManager.Poll` requires a valid 32-byte `provisioningSecret`, and nothing in the agent produces or displays one. The desktop prompt shows only a six-digit `userCode`; the tray menu has no QR item; `/pairing` shows no secret | `PairingPromptForm.cs`, `SessionAgentRuntime.BuildTrayIcon`, `Endpoints.RenderPairingPage` | **Pairing cannot complete on a stock build.** The highest-priority item in this document |
+| ~~D1~~ | **RESOLVED.** The QR emitter exists: `QrEncoder` renders byte-mode ECC-L versions 1-10, `GET /pairing/qr.svg?code=` serves it as SVG, and the desktop prompt shows it inline. The round trip is verified by decoding the emitted matrix back to the URL. A headless machine additionally has `esirc pair url <code>`, which prints the same URL the QR encodes | `QrEncoder.cs`, `Endpoints.RenderQrSvg`, `PairCommands.Url` | Was: **pairing could not complete on a stock build.** No longer applies |
 | **D2** | `POST /api/v1/system/process/{pid}/terminate` requires only the `read` scope. `/api/v1/system` matches no special prefix, so `RequiredScope` returns the `read` default without consulting the method | `RequestSignatureValidator.RequiredScope` | A `read`-only device can terminate arbitrary processes, including other users', with `SeDebugPrivilege` |
 | **D3** | WebSocket frames are not scope-checked. The `/ws` upgrade passes through the scope table as `read`; `DispatchAsync` then handles `remote.input` and `remote.key` with no further check | `WebSocketHub.DispatchAsync` | A `read`-only device can inject mouse and keyboard into the interactive desktop, bypassing the `control` requirement on `POST /remote/input` |
 
@@ -164,11 +164,9 @@ Ordered by the damage of leaving them undone.
 
 ### Immediate — correctness and access control
 
-1. **Ship a pairing QR emitter.** Render a QR on the desktop prompt (or a tray-menu item)
-   carrying `host`, `port`, `deviceId`, `spkiSha256`, `macAddress` and the base64
-   `provisioningSecret`. The phone's parser already accepts this shape and lists the fields
-   it is missing by name. Without this, nothing else in the product can be exercised by a
-   user. Closes **D1**.
+1. ~~**Ship a pairing QR emitter.**~~ Done. `QrEncoder` renders it, `/pairing/qr.svg` serves
+   it, the desktop prompt shows it, and `esirc pair url` covers the headless case. Closes
+   **D1**, which was the item that stopped a user exercising anything else in the product.
 2. **Fix the scope table for process termination.** Add `/api/v1/system/process` to the
    `control` branch. Closes **D2**. One line, and add an integration test alongside it —
    `AgentIntegrationTests` already has `The_files_scope_is_required_for_file_routes` and

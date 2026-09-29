@@ -48,8 +48,9 @@ class PairedMachine {
 
   EsiEndpoint get endpoint => EsiEndpoint(host: host, port: port, pins: pins);
 
-  String get displayAddress =>
-      port == EsiProtocol.defaultHttpsPort ? host : '$host:$port';
+  /// Always includes the port. This string is pasted into the pairing-page URL that the
+  /// user is told to open on the PC, and a URL without a port means 443.
+  String get displayAddress => endpoint.displayAddress;
 
   EsiIdentity get identity => EsiIdentity(
         deviceId: deviceId,

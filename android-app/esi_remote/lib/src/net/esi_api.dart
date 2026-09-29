@@ -114,20 +114,23 @@ class EsiEndpoint {
   /// Current pin, and possibly the next one during a rotation window.
   final List<String> pins;
 
+  /// `host:port`, always with the port spelled out. See [EsiProtocol.authority] for why
+  /// the default port is not special-cased.
+  String get authority => EsiProtocol.authority(host, port);
+
   Uri apiUri(String path, [String? rawQuery]) {
-    final authority = port == EsiProtocol.defaultHttpsPort ? host : '$host:$port';
     final suffix = (rawQuery == null || rawQuery.isEmpty) ? path : '$path?$rawQuery';
     // Braces are required: `$EsiProtocol.apiBase` would interpolate the *identifier*,
     // not the value, and produce a URL like `https://hostesiprotocol.apibase/…`.
     return Uri.parse('https://$authority${EsiProtocol.apiBase}$suffix');
   }
 
-  Uri wsUri() {
-    final authority = port == EsiProtocol.defaultHttpsPort ? host : '$host:$port';
-    return Uri.parse('wss://$authority${EsiProtocol.webSocketPath}');
-  }
+  Uri wsUri() => Uri.parse('wss://$authority${EsiProtocol.webSocketPath}');
 
-  String get displayAddress => port == EsiProtocol.defaultHttpsPort ? host : '$host:$port';
+  /// The address as a human reads it, and as it appears in the pairing-page URL the app
+  /// tells the user to open. The port is included for the same reason as in [authority]:
+  /// the string is pasted into a URL, and a URL without a port means 443.
+  String get displayAddress => authority;
 
   EsiEndpoint withPins(List<String> next) =>
       EsiEndpoint(host: host, port: port, pins: next);
@@ -339,10 +342,19 @@ class EsiApi {
     final uri = endpoint.apiUri(path, rawQuery);
     final headers = <String, String>{};
     if (signed) {
+      // Signed over `uri.path` and `uri.query`, not over the `path` argument.
+      //
+      // `apiUri` puts EsiProtocol.apiBase (`/api/v1`) in front of the path it is given, so
+      // the request that goes on the wire is `/api/v1/system/info` while the argument is
+      // `/system/info`. The agent builds its canonical target from the raw path it received,
+      // so signing the argument produced an HMAC over a different string and every signed
+      // request came back `esi_signature`. Deriving both from the URI that is actually sent
+      // is what makes the rule "sign exactly what you send" true by construction rather than
+      // by remembering.
       headers.addAll(signHeaders(
         method: method,
-        path: path,
-        rawQuery: rawQuery,
+        path: uri.path,
+        rawQuery: uri.query,
         body: body,
       ));
     } else if (contentType != null) {

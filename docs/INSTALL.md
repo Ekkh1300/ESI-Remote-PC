@@ -182,7 +182,7 @@ Phone                                       PC
 ### On the desktop
 
 The dialog is shown by the session agent, so **somebody has to be logged in**. If nobody is,
-`approval` comes back as `tray-or-cli` and nothing is displayed — see §5.
+`approval` comes back as `browser-or-cli` and nothing is displayed — see §5.
 
 The dialog is built to make denial the path of least resistance:
 
@@ -202,20 +202,22 @@ timeout that defaults to yes and no way to approve from the phone.
 valid 32-byte `provisioningSecret` as the `secret` query parameter. Without it the response
 is `{"status":"error"}`, forever, and the phone can never pair.
 
-**The Windows Agent does not render a pairing QR code.** The tray menu has three items —
-*Open pairing page*, *Remote control status*, *Exit* — and the pairing page shows the
-device name, id and pin but no secret. The dialog says "Type this code on the phone" and
-the six-digit `userCode` is the only value the human is asked to transfer.
+**The Windows Agent renders the pairing QR in the desktop prompt**, and serves the same code
+at `GET /pairing/qr.svg?code=<code>`. The tray menu has three items — *Open pairing page*,
+*Remote control status*, *Exit* — and deliberately no QR item: the code is a credential, and
+a menu that displayed one would put it in front of anyone who could reach the notification
+area. The pairing page renders the QR when given `?code=`, and shows the device name, id and
+pin.
 
 `PROTOCOL.md` §5.4 and §9.3 describe a QR carrying the provisioning secret, and the mobile
 app's parser (`lib/src/protocol/pairing_qr.dart`) accepts a QR, a URI, a bare query string
 or a JSON object — its own comment says "no code in the agent emits it, so there is no
-canonical encoding to match". The phone is prepared for a QR that the PC does not produce.
+canonical encoding to match". The phone is prepared for a QR that the PC now does produce.
 
-**This is the one gap that affects a user directly.** In the current build, pairing requires
-an out-of-band source for the 32-byte provisioning secret that does not exist in the shipped
-agent. See [`SECURITY.md`](SECURITY.md) §12 items 9 and 10, and
-[`ROADMAP.md`](ROADMAP.md).
+**This gap is closed.** `QrEncoder` renders the code, the desktop prompt shows it inline,
+`GET /pairing/qr.svg?code=` serves it as SVG, and `esirc pair url <code>` prints the same URL
+as text for a machine with no display. The round trip is verified by decoding the emitted
+matrix back to the URL it was built from. See [`PROTOCOL.md`](PROTOCOL.md) §9.4.
 
 ### Pairing without a session agent
 
@@ -225,9 +227,22 @@ Approve from a console on the machine instead:
 ```powershell
 sc stop ESIRemotePcAgent
 .\ESI.RemotePc.Agent.Cli.exe pair pending
+.\ESI.RemotePc.Agent.Cli.exe pair url 418207      # only if there is no display for the QR
 .\ESI.RemotePc.Agent.Cli.exe pair approve 418207
 sc start ESIRemotePcAgent
 ```
+
+The service has to be stopped because `approve` mints device credentials and rewrites rows
+the running agent also holds. The phone will show a connection error for the few seconds the
+agent is down and then recover on its own; the attempt is in the database and the approval is
+waiting for it.
+
+`pair url` is only needed when the QR has nowhere to be displayed. It prints the polling URL,
+which carries the provisioning secret, so treat the output as a credential — it is valid
+until the attempt is approved or expires. There is deliberately no browser equivalent: the
+pairing page is reachable by anything on the LAN and the code is six digits, so a page that
+could show the secret *and* approve would let an attacker drive their own pairing to
+completion. See [`PROTOCOL.md`](PROTOCOL.md) §9.4.
 
 `pair approve` grants `read`, `control` and `files`. It does **not** grant `admin`, so a
 CLI-approved device cannot rotate keys, read the audit log, change settings or manage other
@@ -519,10 +534,12 @@ maps to:
    The session agent's own log repeats it as `The command channel is not available yet` and
    retries every 3 s.
 
-> **The tray menu does not have a "Show pairing QR" item.** The `/pairing` page and the
-> `PairingManager` log both tell the user to look for one. The menu has *Open pairing
-> page*, *Remote control status* and *Exit*. The page it opens is the right place to put the
-> QR when one exists; today it shows no secret. See §4.
+> **The tray menu does not have a "Show pairing QR" item, and never did.** The menu has
+> *Open pairing page*, *Remote control status* and *Exit*. Earlier drafts of the pairing
+> instructions told the user to look for a QR item; they were wrong and the text has been
+> corrected everywhere. The QR is on the desktop prompt and at `/pairing/qr.svg?code=`, and
+> `esirc pair url <code>` prints the same URL for a machine with no display at all. See §4
+> and `PROTOCOL.md` §9.4.
 
 6. **Read the session agent's log.** It is per user and is **not** reachable through
    `GET /api/v1/logs`:

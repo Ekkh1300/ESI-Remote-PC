@@ -87,10 +87,22 @@ prompt at a login screen, and no prompt if the session agent is not running.
 
 | Cause | How to tell | Fix |
 |---|---|---|
-| Nobody is logged in | `POST /pair/request` returns `approval: "tray-or-cli"` | Log in, then retry. Or approve from the console: stop the service, `esirc pair approve <code>`, start it |
+| Nobody is logged in | `POST /pair/request` returns `approval: "browser-or-cli"` | Log in, then retry — the prompt is the only route that needs nothing but a user. Otherwise the three-step console sequence below |
+| The phone is on a headless PC and the QR has nowhere to be shown | Same as above, and there is no display to open the pairing page on | `esirc pair url <code>` prints the URL the QR would have carried; paste it into the phone's *Paste* box on the pairing screen |
 | The session agent is not running | `GET /api/v1/remote/session` → `sessionAgentState` is not `Ready` | See [remote control](#remote-control-session-agent-not-connected) |
 | The dialog was denied or dismissed | Poll returns `denied` or `expired` | Retry. Deny is the default button and every other exit path is a denial, by design |
-| The service is running and `esirc pair approve` refuses | `The service is Running. Stop it first:` | `sc stop ESIRemotePcAgent`, approve, `sc start ESIRemotePcAgent` |
+| The service is running and `esirc pair approve` refuses | `The service is Running, and 'approve' rewrites pairing state…` | All three, in order: `sc stop ESIRemotePcAgent`, `esirc pair approve <code>`, `sc start ESIRemotePcAgent`. The phone shows a connection error for a few seconds and recovers on its own |
+
+There is deliberately no way to approve from a browser. The `/pairing` page is reachable by
+anything on the LAN and the user code is six digits, so a page that could approve would let
+anyone approve a pairing they started themselves. See `SECURITY.md` §12.
+
+Both `pair url` and `pair approve` accept `--data-dir` and `--port`, for when the agent was
+not started by the installer and so is not the one under `ProgramData`:
+
+```
+esirc pair url 418207 --port 48333 --data-dir D:\esi-test
+``` |
 | The code was mistyped | `esirc pair approve` prints `No pending pairing matches the code` | The code expires in 30–900 s. Start over |
 | `maxPairedDevices` reached | `409 esi_conflict`, "The maximum number of paired devices (8) has been reached" | `esirc pair revoke <deviceId>` or `DELETE /api/v1/devices/{deviceId}` |
 | The `userCode` is stale | `esirc pair pending` lists it as expired | The list only shows unexpired attempts. Retry from the phone |

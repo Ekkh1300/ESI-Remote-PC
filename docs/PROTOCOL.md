@@ -93,6 +93,21 @@ The unauthenticated surface as a whole is budgeted separately and much more tigh
 (`security.unauthenticatedPerMinute`, default 30, burst 10), so a caller cannot spend the
 pairing budget on health checks.
 
+`GET /api/v1/pair/session` is the one route that is **not** on that budget, and the
+exception is load-bearing. The agent's own `pair/request` response tells a phone to poll
+this route every `pollIntervalMs` (1000 ms) for the whole of `pairingWindowSeconds` (120 s),
+so a client that obeys the protocol makes ~120 requests to get through one pairing. Against
+a budget of 30 a minute that client is throttled about a quarter of the way through the
+window, and any user who takes more than half a minute to approve a pairing sees it fail.
+The poll route therefore has its own budget, derived at startup from the two protocol
+constants rather than configured, so it cannot fall behind the advice the agent is giving:
+`RateLimiter.RequiredPairingPollsPerMinute` returns twice the polls the protocol demands,
+clamped to a floor of 60 and a ceiling of 100000. Doubling absorbs a client that polls a
+little faster than asked; the clamp keeps a spinning client bounded.
+
+This was found by pointing the real app at a running agent, not by reading the code. The
+budget was 30 a minute, hard-coded, and the tests all passed.
+
 ### 3.1 `GET /api/v1/handshake` → 200
 
 ```json
@@ -150,6 +165,17 @@ Phone                                       PC
 { "pairingId": "b21f…", "userCode": "418207", "expiresAt": 1756000120,
   "approval": "desktop-prompt", "pollIntervalMs": 1000 }
 ```
+
+`approval` is one of two tokens, and a client has to be able to tell them apart because
+they imply different instructions for the human:
+
+| Token | Meaning | What the human does |
+|---|---|---|
+| `desktop-prompt` | A signed-in session was found and has been asked to prompt. | Approve in the prompt on the PC. The phone then scans the QR that prompt shows. |
+| `browser-or-cli` | Nobody is signed in, so there is no trusted display. | Stop the agent, run `esirc pair approve <code>`, start it. See §5.4.1. |
+
+An earlier draft called the second token `tray-or-cli`. There is a tray icon, but it has no
+pairing item, so the name described a UI that does not exist.
 
 `GET /pair/session?id=` → `200` with one of:
 
@@ -904,6 +930,27 @@ QR (see 5.4.2). The manually entered `macAddress` is what the app uses for Wake-
 There is no "Show pairing QR" tray item. Earlier drafts referred to one; the QR lives in the
 approval prompt, on the `/pairing` page and at `/pairing/qr.svg`, and those are the only
 places it exists.
+
+### 9.4 Getting the secret without a display
+
+The provisioning secret reaches the phone through the QR, which needs something to look at.
+On a headless machine there is nothing, so the agent also accepts a console route:
+
+```
+esirc pair url <code>
+```
+
+which prints the same polling URL the QR encodes. This is a local administrative command
+that already requires the ability to rewrite the pairing database, and the secret only ever
+releases credentials to whoever presents it, so it widens nothing that `/pairing` does not
+already expose.
+
+What deliberately does **not** exist is a way to approve from the browser. The `/pairing`
+page is reachable by anything on the LAN, and the user code is six digits, so a page that
+could approve would let an attacker approve a pairing attempt they started themselves -
+which is precisely what the desktop prompt exists to prevent. Approval needs a signed-in
+user at the prompt, or the console. `esirc pair approve` therefore requires the service to
+be stopped first, and says so in full when it will not proceed.
 
 ---
 

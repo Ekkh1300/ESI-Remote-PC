@@ -57,15 +57,19 @@ Name: "createdesktop"; Description: "Create a desktop shortcut"; GroupDescriptio
   Flags: unchecked
 
 [Files]
-; The three published executables. They are self-contained single files, so there is no
-; dependency tree to lay down and the install directory can be moved or deleted freely.
-; All three are packed into this one installer executable, which is the deliverable.
-Source: "..\artifacts\publish\ESI.RemotePc.Agent.Service.exe"; DestDir: "{app}"; \
-  Flags: ignoreversion
-Source: "..\artifacts\publish\ESI.RemotePc.Session.exe";         DestDir: "{app}"; \
-  Flags: ignoreversion
-Source: "..\artifacts\publish\ESI.RemotePc.Agent.Cli.exe";       DestDir: "{app}"; \
-  Flags: ignoreversion
+; One shared self-contained layout, not three self-contained single files.
+;
+; Each single-file bundle carries its own LZMA-compressed copy of the .NET runtime, so the
+; installer has nothing left to compress and ends up shipping the runtime three times: 129.7
+; MB. Publishing the three executables as a loose self-contained layout instead puts the
+; runtime in the directory once, where Inno compresses it at install time, for 43.8 MB. Same
+; binaries, same behaviour, two thirds of the download.
+;
+; The three entry-point executables are 160 KB apphost launchers now rather than 40-60 MB
+; bundles, and they only run as a set with the DLLs beside them. That is the whole trade:
+; the install directory is a .NET application directory, not three independent binaries.
+Source: "..\artifacts\publish\*"; DestDir: "{app}"; \
+  Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 ; The service creates this on first run; making it here means the ACLs are set once, at

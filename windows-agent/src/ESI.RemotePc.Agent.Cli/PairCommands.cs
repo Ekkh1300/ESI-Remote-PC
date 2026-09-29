@@ -92,6 +92,57 @@ internal static class PairCommands
     /// is the same trust decision the prompt represents.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Prints the polling URL for a pending attempt, which carries the provisioning secret.
+    /// <para>
+    /// This exists because the secret otherwise has exactly one route to the phone: the QR
+    /// the agent renders, which needs either a signed-in user to look at a desktop prompt or
+    /// a browser pointed at a screen. Neither is available on a headless machine, so the
+    /// documented recovery - stop the service, approve, start it - had no supported way to
+    /// finish. An administrator reading the secret off a console is exactly the person the
+    /// desktop prompt would have been asking.
+    /// </para>
+    /// <para>
+    /// It widens nothing remotely: this is a local console command that already requires the
+    /// ability to rewrite the pairing database, and the secret only ever releases credentials
+    /// to whoever presents it. Printing it here does not make the /pairing page any more
+    /// dangerous than it already is, which is why that page still cannot approve.
+    /// </para>
+    /// </summary>
+    public static int Url(string userCode)
+    {
+        var normalised = Normalise(userCode);
+
+        using var scope = BuildScope();
+        var pairing = scope.GetRequiredService<PairingManager>();
+        // From the settings store rather than the service's configured port: this scope has
+        // no Kestrel tuning in it, and the store is the one place that resolves the port
+        // the same way the agent did, command-line override and --data-dir included.
+        var settings = scope.GetRequiredService<SettingsStore>();
+        var attempt = pairing.GetByUserCode(normalised);
+
+        if (attempt is null)
+        {
+            Console.Error.WriteLine($"No pending pairing matches the code '{normalised}'.");
+            return 1;
+        }
+
+        if (attempt.Status != PairingStatus.Pending)
+        {
+            Console.Error.WriteLine(
+                $"That attempt is already {attempt.Status.ToString().ToLowerInvariant()}, so its " +
+                "secret is no longer of any use. Run 'esirc pair pending' to see what is waiting.");
+            return 1;
+        }
+
+        // Addressed at localhost because the administrator is at the machine. The phone
+        // reads the same URL and substitutes its own host, which is why the QR is generated
+        // from the requesting address instead.
+        Console.WriteLine(pairing.BuildPollingUrl(
+            attempt, "localhost", Port ?? settings.Current.Port));
+        return 0;
+    }
+
     public static int Approve(string userCode)
     {
         var normalised = Normalise(userCode);
@@ -200,6 +251,28 @@ internal static class PairCommands
     /// only one of them would get the attention.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The data directory these commands operate on, from <c>--data-dir</c>.
+    /// <para>
+    /// Set once by the argument parser before any subcommand runs. It exists so the CLI can
+    /// be pointed at the same database as a console agent started with its own
+    /// <c>--data-dir</c>, instead of at whichever directory the two happen to resolve
+    /// independently.
+    /// </para>
+    /// </summary>
+    internal static string? DataDir { get; set; }
+
+    /// <summary>
+    /// The HTTPS port the agent is listening on, from <c>--port</c>.
+    /// <para>
+    /// Needed because a port chosen on the agent's command line exists only in that process.
+    /// Nothing persists it, so a separate <c>esirc</c> has no way to learn it, and
+    /// <c>pair url</c> would otherwise hand out a URL pointing at the default port - which
+    /// for a console agent on anything but 48220 is a port nothing is listening on.
+    /// </para>
+    /// </summary>
+    internal static int? Port { get; set; }
+
     private static ServiceProvider BuildScope()
     {
         var services = new ServiceCollection();
@@ -208,7 +281,7 @@ internal static class PairCommands
         // a stray provider would interleave framework warnings into that output.
         services.AddLogging();
 
-        var options = new AgentOptions { DataDirectory = ServiceManager.ResolveDataDirectory() };
+        var options = new AgentOptions { DataDirectory = ServiceManager.ResolveDataDirectory(DataDir) };
         services.AddSingleton(options);
         services.AddSingleton<AgentDatabase>();
         services.AddSingleton<DeviceStore>();

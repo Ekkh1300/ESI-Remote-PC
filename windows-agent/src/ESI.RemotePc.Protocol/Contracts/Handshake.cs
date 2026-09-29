@@ -45,7 +45,10 @@ public sealed class PairRequestResponse
     [JsonPropertyName("userCode")] public string UserCode { get; set; } = "";
     [JsonPropertyName("expiresAt")] public long ExpiresAt { get; set; }
     [JsonPropertyName("approval")] public string Approval { get; set; } = "desktop-prompt";
-    [JsonPropertyName("pollIntervalMs")] public int PollIntervalMs { get; set; } = 1000;
+    // Defaulted from the protocol constant, not written as a literal: the rate-limit budget
+    // for the route this tells a phone to poll is derived from the same constant, and two
+    // copies of the number is how they drifted apart before.
+    [JsonPropertyName("pollIntervalMs")] public int PollIntervalMs { get; set; } = ProtocolConstants.PairingPollIntervalMs;
 }
 
 /// <summary>Body of <c>GET /api/v1/pair/session</c>.</summary>

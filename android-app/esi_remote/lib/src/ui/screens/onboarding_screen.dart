@@ -632,9 +632,14 @@ class _QrPanelState extends ConsumerState<_QrPanel> {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(
-            'On the PC, open the ESI Remote PC tray menu and choose "Show pairing QR". The '
-            'code carries the address, the certificate pin and the one-time secret, which '
-            'is the only way to pair without typing them.',
+            'Someone has to approve this on the PC, and nothing else will do it. Sign in to '
+            'the PC and a prompt appears there - approve it there, then scan the QR it shows.\n\n'
+            'If nobody is signed in, there is no trusted display for the code, so it cannot '
+            'be approved in a browser. Stop the agent, run "esirc pair approve <code>" in a '
+            'console on the PC, and start the agent again.\n\n'
+            'That is deliberate. The pairing page is reachable by anything on the LAN and the '
+            'code is only six digits, so a page that could approve would let anyone approve a '
+            'pairing they started themselves.',
             style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
           ),
           const SizedBox(height: EsiSpace.lg),
@@ -745,7 +750,7 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
                   Padding(
                     padding: const EdgeInsets.all(EsiSpace.lg),
                     child: Text(
-                      'The code is on the PC\'s screen, under the tray icon. A phone camera '
+                      'The code is on the pairing page in the PC\'s browser. A phone camera '
                       'cannot read a screen that is asleep — wake it first.',
                       textAlign: TextAlign.center,
                       style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),

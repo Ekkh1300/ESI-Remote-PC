@@ -183,4 +183,92 @@ public sealed class RateLimiterTests
         // housekeeping pass must never take a live bucket out of service.
         Assert.NotNull(limiter.DenialCounts);
     }
+
+    // ------------------------------------------------------------------------------------
+    // The pairing poll budget.
+    //
+    // Found by pointing the real app at a running agent: it began with 429 part-way through
+    // pairing, because the poll route shared the 30-a-minute unauthenticated budget while
+    // the agent's own pair/request response tells a phone to poll every 1000 ms for 120 s.
+    // The tests below state the invariant that was violated, so that changing either the
+    // window or the poll interval cannot quietly reintroduce it.
+    // ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The budget must cover a full window of polling at the interval the agent advertises.
+    /// </summary>
+    [Theory]
+    [InlineData(120, 1000)]  // the shipped defaults
+    [InlineData(300, 1000)]  // a longer window
+    [InlineData(120, 500)]   // a faster poll
+    [InlineData(900, 250)]   // both extremes of the allowed ranges
+    public void The_poll_budget_covers_a_whole_window_at_the_advertised_interval(
+        int windowSeconds, int intervalMs)
+    {
+        var perMinute = RateLimiter.RequiredPairingPollsPerMinute(windowSeconds, intervalMs);
+        var pollsPerMinuteTheProtocolDemands = 60_000d / intervalMs;
+
+        Assert.True(
+            perMinute >= pollsPerMinuteTheProtocolDemands,
+            $"a phone polling every {intervalMs} ms needs {pollsPerMinuteTheProtocolDemands:N0} " +
+            $"requests a minute to finish a {windowSeconds} s window, but the budget is {perMinute}");
+    }
+
+    /// <summary>
+    /// The budget must not become so generous that a phone ignoring <c>pollIntervalMs</c> and
+    /// spinning is unbounded. This is the reason the budget is derived rather than disabled.
+    /// </summary>
+    [Fact]
+    public void The_poll_budget_still_bounds_a_client_that_ignores_the_interval()
+    {
+        var perMinute = RateLimiter.RequiredPairingPollsPerMinute(120, 1000);
+
+        Assert.InRange(perMinute, 60, 1_000);
+    }
+
+    /// <summary>A nonsensical interval must not divide by zero or produce a budget of zero.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void A_zero_or_negative_interval_falls_back_instead_of_dividing(int intervalMs)
+    {
+        Assert.InRange(RateLimiter.RequiredPairingPollsPerMinute(120, intervalMs), 60, 1_000);
+    }
+
+    /// <summary>
+    /// The poll route has its own bucket, separate from the tight unauthenticated one, and
+    /// throttling a poll produces the polling-specific message rather than the generic one.
+    /// </summary>
+    [Fact]
+    public void The_poll_bucket_is_independent_of_the_unauthenticated_bucket()
+    {
+        var limiter = new RateLimiter();
+        var address = Address(90);
+
+        // Drain the tight budget.
+        for (var i = 0; i < limiter.UnauthenticatedBurst + limiter.UnauthenticatedPerMinute; i++)
+        {
+            limiter.TryConsumeForAddress(address, "unauth");
+        }
+        Assert.False(limiter.TryConsumeForAddress(address, "unauth"));
+
+        // The poll budget is untouched by that, which is the whole point.
+        Assert.True(limiter.TryConsumeForAddress(address, "pairpoll"));
+    }
+
+    /// <summary>A client that spins is still stopped by the poll budget.</summary>
+    [Fact]
+    public void The_poll_bucket_still_answers_no_eventually()
+    {
+        var limiter = new RateLimiter();
+        var address = Address(91);
+
+        var refusals = 0;
+        for (var i = 0; i < 5_000; i++)
+        {
+            if (!limiter.TryConsumeForAddress(address, "pairpoll")) refusals++;
+        }
+
+        Assert.True(refusals > 0, "5000 polls in a minute should not all be allowed");
+    }
 }

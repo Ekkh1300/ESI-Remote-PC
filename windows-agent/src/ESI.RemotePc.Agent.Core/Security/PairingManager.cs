@@ -114,7 +114,7 @@ public sealed class PairingManager(
             attempt.DeviceName, attempt.Platform, remoteAddress, attempt.UserCode, expiresAt);
 
         // Ask the interactive session to prompt the user. If nobody is logged on, the
-        // attempt stays pending and the user can approve from the tray or the CLI.
+        // attempt stays pending and the user approves on the pairing page, or from the CLI.
         //
         // The polling URL - which carries the provisioning secret - is computed from the
         // *requesting* address, because that is the host the phone can already reach. Using
@@ -139,8 +139,10 @@ public sealed class PairingManager(
         {
             log.LogInformation(
                 "No interactive session is available for a prompt. Open {Url} on this PC to " +
-                "transfer the pairing secret, then approve it from the tray icon or by running: " +
-                "esirc pair approve {Code}", BuildPollingUrl(attempt, "localhost", Port), attempt.UserCode);
+                "transfer the pairing secret to the phone, then approve it with " +
+                "'esirc pair approve {Code}' - which needs the service stopped, because the " +
+                "page cannot approve: it is reachable by anything on the LAN and the code " +
+                "is six digits.", BuildPollingUrl(attempt, "localhost", Port), attempt.UserCode);
         }
 
         PairingRequested?.Invoke(this, attempt);
@@ -150,8 +152,8 @@ public sealed class PairingManager(
             PairingId = attempt.PairingId,
             UserCode = attempt.UserCode,
             ExpiresAt = expiresAt,
-            Approval = sessionAgent.IsConnected ? "desktop-prompt" : "tray-or-cli",
-            PollIntervalMs = 1000,
+            Approval = sessionAgent.IsConnected ? "desktop-prompt" : "browser-or-cli",
+            PollIntervalMs = ProtocolConstants.PairingPollIntervalMs,
         }, attempt.PairingId);
     }
 

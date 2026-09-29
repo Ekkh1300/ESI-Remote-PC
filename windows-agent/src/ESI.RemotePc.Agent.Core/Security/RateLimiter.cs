@@ -66,6 +66,43 @@ public sealed class RateLimiter
     /// </summary>
     public int PairingBurst { get; set; } = 5;
 
+    /// <summary>
+    /// How many times a phone may poll one pairing attempt before the sustained budget kicks
+    /// in, and how many it may poll per minute.
+    /// <para>
+    /// This budget exists because the protocol tells the phone to poll
+    /// <c>GET /api/v1/pair/session</c> every <c>pollIntervalMs</c> for as long as
+    /// <c>pairingWindowSeconds</c> lasts, and that route is unauthenticated. With the
+    /// general unauthenticated budget of 30 a minute, a phone following the protocol
+    /// exactly gets throttled about a quarter of the way through the window, so any user
+    /// who takes more than half a minute to approve a pairing sees it fail. That is a
+    /// product that cannot be paired slowly, which is most of the time.
+    /// </para>
+    /// <para>
+    /// The numbers are derived from the protocol constants rather than guessed, and the
+    /// defaults here are recomputed from them in <c>AgentHostedService</c> so the budget
+    /// cannot fall behind the window again if either changes. The headroom over the
+    /// protocol's own worst case absorbs a phone that polls a little faster than asked, and
+    /// a client that ignores <c>pollIntervalMs</c> and spins is still bounded.
+    /// </para>
+    /// </summary>
+    public int PairingPollsPerMinute { get; set; } = 240;
+
+    public int PairingPollBurst { get; set; } = 20;
+
+    /// <summary>
+    /// The polling budget implied by the protocol: one poll per <paramref name="intervalMs"/>
+    /// for the length of the window, with headroom, expressed per minute.
+    /// </summary>
+    public static int RequiredPairingPollsPerMinute(int windowSeconds, int intervalMs)
+    {
+        if (intervalMs <= 0) return 240;
+        var pollsPerWindow = (int)Math.Ceiling(windowSeconds * 1000.0 / intervalMs);
+        // 2x headroom, and never below a handful per second, so a phone that polls at the
+        // protocol's rate is never throttled by its own agent.
+        return Math.Clamp(pollsPerWindow * 2, 60, 100_000);
+    }
+
     public static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     /// <summary>
@@ -144,6 +181,10 @@ public sealed class RateLimiter
         var (perMinute, burst) = category switch
         {
             "unauth" => (UnauthenticatedPerMinute, UnauthenticatedBurst),
+            // The poll route gets its own budget, sized to the protocol's own poll rate.
+            // See PairingPollsPerMinute for why the general unauthenticated one is wrong
+            // for it.
+            "pairpoll" => (PairingPollsPerMinute, PairingPollBurst),
             _ => (RequestsPerMinute * 2, Burst * 2),
         };
 

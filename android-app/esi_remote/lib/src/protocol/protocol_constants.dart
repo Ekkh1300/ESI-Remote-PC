@@ -17,6 +17,19 @@ class EsiProtocol {
   static const int defaultHttpsPort = 48220;
   static const int defaultDiscoveryPort = 48211;
 
+  /// `host:port` for a URL authority, always with the port spelled out.
+  ///
+  /// The port must never be dropped, even when it equals [defaultHttpsPort]: an `https`
+  /// URL with no port means 443, and the agent does not listen on 443. Omitting it made
+  /// the app unable to reach any agent on the only port a normal install uses.
+  ///
+  /// IPv6 literals are bracketed, because a second unbracketed colon would otherwise be
+  /// read as the start of the port. A LAN is as likely to hand out a v6 address as not.
+  static String authority(String host, int port) {
+    final bracketed = host.contains(':') && !host.startsWith('[') ? '[$host]' : host;
+    return '$bracketed:$port';
+  }
+
   /// UDP payload broadcast to elicit a discovery reply.
   static const String discoveryProbe = 'ESI_DISCOVER_V1';
 

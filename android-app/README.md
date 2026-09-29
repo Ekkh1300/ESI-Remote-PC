@@ -58,15 +58,16 @@ build with a single ABI is a fraction of this.
 
 ## How to pair
 
-1. **Install the agent on the PC** and let it start. The tray icon appears; its device id
-   and TLS pin are on the `http://<pc>:48220/pairing` page.
+1. **Install the agent on the PC** and let it start. The tray icon appears; the device id
+   and TLS pin are on the `https://<pc>:48220/pairing` page.
 2. **Open the app.** It searches the local subnets and broadcasts a discovery probe
-   automatically. Pick the machine, or enter the address by hand, or scan the QR from the
-   tray menu's *Show pairing QR*.
+   automatically. Pick the machine, or enter the address by hand, or start a pairing attempt
+   and scan the QR from the `/pairing` page on the PC.
 3. **Confirm on the phone.** The app checks the address, then shows exactly what it is
    about to connect to.
-4. **Approve on the PC.** A six-digit code appears in the desktop prompt. The phone waits,
-   showing the same code and a countdown. Nothing is paired until the PC says yes.
+4. **Approve on the PC.** A six-digit code appears in the desktop prompt — or, if nobody is
+   signed in, on the `/pairing` page. The phone waits, showing the same code and a
+   countdown. Nothing is paired until the PC says yes.
 5. The phone unwraps its credentials and stores them in the Android keystore. Done.
 
 Pairing needs a **pairing secret** in addition to the certificate pin. It exists only on

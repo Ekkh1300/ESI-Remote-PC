@@ -213,11 +213,23 @@ public sealed class SignatureAuthenticationMiddleware(RequestDelegate next)
 
         if (IsPublic(path))
         {
-            // Unauthenticated endpoints get their own, much tighter budget.
-            if (!limiter.TryConsumeForAddress(RequestContextMiddleware.Get(context).RemoteAddress, "unauth"))
+            // Unauthenticated endpoints get their own, much tighter budget. The one
+            // exception is the pairing poll, which the protocol requires a phone to make
+            // every pollIntervalMs for the whole pairing window; the general budget is far
+            // too small for that and would fail any pairing the user did not approve
+            // instantly. See RateLimiter.PairingPollsPerMinute.
+            var bucket = path.StartsWith("/api/v1/pair/session", StringComparison.OrdinalIgnoreCase)
+                ? "pairpoll"
+                : "unauth";
+
+            if (!limiter.TryConsumeForAddress(RequestContextMiddleware.Get(context).RemoteAddress, bucket))
             {
                 await ApiError.WriteAsync(context, StatusCodes.Status429TooManyRequests,
-                    ErrorCodes.RateLimited, "Too many unauthenticated requests.").ConfigureAwait(false);
+                    ErrorCodes.RateLimited,
+                    bucket == "pairpoll"
+                        ? "This phone is polling the pairing attempt faster than the agent allows. "
+                          + "Wait for the countdown to finish and try again."
+                        : "Too many unauthenticated requests.").ConfigureAwait(false);
                 return;
             }
 

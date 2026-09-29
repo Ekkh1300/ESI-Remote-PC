@@ -19,8 +19,8 @@ Two halves that share one wire contract:
 Everything below is implemented, builds clean, and is covered by the test suite or the
 runtime smoke test. Nothing in this README is aspirational.
 
-- **Windows Service agent** — real SCM service, auto-start, restart-on-failure, self-contained
-  single-file binary that needs no .NET runtime on the target machine.
+- **Windows Service agent** — real SCM service, auto-start, restart-on-failure. Ships as a
+  self-contained .NET application, so the target machine needs no .NET runtime installed.
 - **HTTPS API + WebSocket** — Kestrel with a self-signed ECDSA P-256 identity; the phone
   pins the SPKI hash out of band.
 - **Request signing** — HMAC-SHA256 over a canonical 8-line string, with HKDF-SHA256 key
@@ -153,7 +153,28 @@ pwsh -File windows-agent\tests\smoke-test.ps1
 ```
 
 The smoke test is deliberately external to the test project: it exercises the published
-single-file binary, because that is the artefact that actually ships.
+output, because that is the artefact that actually ships.
+
+There is a third check, and it is the one that finds the bugs nothing else can:
+
+```bash
+cd android-app/esi_remote
+dart run tool/live_agent_check.dart \
+  --agent   ../../windows-agent/artifacts/publish/ESI.RemotePc.Agent.Service.exe \
+  --esirc   ../../windows-agent/artifacts/publish/ESI.RemotePc.Agent.Cli.exe \
+  --port    48333
+```
+
+It starts a throwaway agent on a spare port with its own data directory — no administrator
+rights, and it does not touch an installed agent — and drives the **app's own** networking,
+TLS pinning, request signing and AES-GCM code against it, approving the pairing through the
+real `esirc`. Eleven assertions, all of them things the two implementations could disagree
+about. Two of the worst bugs in this project were invisible to every other check because
+each half was individually correct and the wiring between them was not: the app signed the
+un-prefixed path while sending the prefixed one, so no signed request could ever verify, and
+the agent bound the `--port` it was given while advertising the default, so a discovered
+agent pointed the phone at a port nothing was listening on. Neither shows up in a unit test.
+`docs/BUILD.md` §6.7 has the full list.
 
 ---
 

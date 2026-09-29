@@ -127,6 +127,17 @@ if (-not $SkipPublish) {
 
     # Each project declares its own RID and self-contained settings, so publish needs no
     # flags beyond the output path.
+    #
+    # PublishSingleFile is switched off here, which is the whole reason the installer is 43.8
+    # MB rather than 129.7. A single-file bundle embeds its own LZMA-compressed copy of the
+    # .NET runtime, so the installer cannot compress it any further and all three bundles
+    # between them ship the runtime three times. A loose self-contained layout keeps the
+    # runtime in the directory once, where Inno compresses it at install time. The three
+    # entry points become 160 KB apphost launchers that need the DLLs beside them.
+    #
+    # The per-project PublishSingleFile in the csproj files is left alone: it is the right
+    # default for running a single project from a build output, and the size argument only
+    # applies when several of them ship in one installer.
     foreach ($project in @(
         'ESI.RemotePc.Agent.Service',
         'ESI.RemotePc.Session',
@@ -134,15 +145,23 @@ if (-not $SkipPublish) {
     )) {
         Invoke-Step "publish $project" {
             & $dotnetExe publish (Join-Path $root "src\$project\$project.csproj") `
-                -c $Configuration -o $publishDir -v minimal
+                -c $Configuration -o $publishDir -v minimal `
+                -p:PublishSingleFile=false -p:EnableCompressionInSingleFile=false
         }
     }
 
     Write-Host ''
     Write-Host 'Artifacts' -ForegroundColor Cyan
-    Get-ChildItem $publishDir -File |
+    Get-ChildItem $publishDir -File -Filter '*.exe' |
         Sort-Object Name |
         ForEach-Object { '  {0,-42} {1,10:N1} MB' -f $_.Name, ($_.Length / 1MB) }
+
+    # Into variables rather than inline: `$(Get-ChildItem ...).Count` inside a double-quoted
+    # string captures only the command, so `.Count` becomes literal text and the whole file
+    # list gets interpolated into the line.
+    $published = Get-ChildItem $publishDir -Recurse -File
+    $totalMb = ($published | Measure-Object Length -Sum).Sum / 1MB
+    Write-Host ('  {0,-42} {1,10:N1} MB' -f "($($published.Count) files, one shared layout)", $totalMb)
 
     Write-Host ''
     Write-Host "  publish directory: $publishDir"

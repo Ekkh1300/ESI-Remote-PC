@@ -27,7 +27,15 @@ public sealed class AgentOptions
 
     public static string DefaultDataDirectory()
     {
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        // PROGRAMDATA is honoured first, and the CLI's own resolver does the same, because
+        // the two disagreed: the CLI read the environment variable while this read the
+        // registry through GetFolderPath. Under a redirected ProgramData - which is how a
+        // portable or test install gets set up - the service and the CLI then opened
+        // different databases, so a pairing approved by one was invisible to the other.
+        var programData = Environment.GetEnvironmentVariable("PROGRAMDATA") is { Length: > 0 } fromEnv
+            ? fromEnv
+            : Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+
         return string.IsNullOrEmpty(programData)
             ? Path.Combine(AppContext.BaseDirectory, "data")
             : Path.Combine(programData, ProtocolConstants.DataDirectoryName);
@@ -84,16 +92,28 @@ public sealed class SettingsStore
 
     private SettingsDto Load()
     {
+        // Start from whatever the command line already put in place, not from a blank DTO.
+        //
+        // This used to return `new SettingsDto()` when there was no settings file, which
+        // silently threw away every `--port`, `--http` and `--debug` override: the listener
+        // took its port from AgentOptions and bound the overridden one, while the handshake,
+        // the discovery reply and the startup banner all read `Current.Port` and reported
+        // the default. The agent therefore listened on one port and told every client to
+        // use another - invisible on a normal install, where both are 48220, and fatal the
+        // moment anybody passed --port. Precedence is the usual one: an explicit flag beats
+        // the file, and the file beats the defaults.
+        var settings = _options.Settings;
+
         try
         {
             if (File.Exists(SettingsPath))
             {
                 var json = File.ReadAllText(SettingsPath);
-                var settings = JsonSerializer.Deserialize<SettingsDto>(json, ProtocolJson.Options);
-                if (settings is not null)
+                var fromFile = JsonSerializer.Deserialize<SettingsDto>(json, ProtocolJson.Options);
+                if (fromFile is not null)
                 {
                     _log.LogInformation("Loaded settings from {Path}", SettingsPath);
-                    return settings;
+                    return Merge(fromFile, _options);
                 }
             }
         }
@@ -104,7 +124,49 @@ public sealed class SettingsStore
             TryBackupCorruptFile();
         }
 
-        return new SettingsDto();
+        return settings;
+    }
+
+    /// <summary>
+    /// Layers the command-line <paramref name="overrides"/> on top of what the file said.
+    /// <para>
+    /// Only values the command line actually set are carried across. Once the flags have
+    /// been folded into the options object, comparing against a fresh <see cref="AgentOptions"/>
+    /// is the only record left of whether a value was asked for or merely left alone - so
+    /// that comparison is what this method turns on.
+    /// </para>
+    /// <para>
+    /// Note that <c>DebugMode</c> and <c>SessionAgentPath</c> are deliberately absent: they
+    /// live on <see cref="AgentOptions"/> rather than on <see cref="SettingsDto"/>, so they are
+    /// read from the options object by whoever needs them and never needed merging here.
+    /// </para>
+    /// </summary>
+    private static SettingsDto Merge(SettingsDto fromFile, AgentOptions overrides)
+    {
+        var pristine = new AgentOptions().Settings;
+
+        if (overrides.Settings.Port != pristine.Port) fromFile.Port = overrides.Settings.Port;
+        if (overrides.Settings.DiscoveryPort != pristine.DiscoveryPort)
+        {
+            fromFile.DiscoveryPort = overrides.Settings.DiscoveryPort;
+        }
+
+        // --http false is the only way to ask for plaintext, so "the file says TLS" must not
+        // be allowed to overrule an explicit --http false.
+        if (overrides.Settings.Security.TlsEnabled != pristine.Security.TlsEnabled)
+        {
+            fromFile.Security.TlsEnabled = overrides.Settings.Security.TlsEnabled;
+        }
+
+        if (overrides.Settings.Debug.Enabled) fromFile.Debug.Enabled = true;
+        if (overrides.Settings.Debug.VerboseLogging) fromFile.Debug.VerboseLogging = true;
+
+        if (overrides.Settings.Files.AllowedRoots.Count > 0)
+        {
+            fromFile.Files.AllowedRoots = overrides.Settings.Files.AllowedRoots;
+        }
+
+        return fromFile;
     }
 
     private void TryBackupCorruptFile()

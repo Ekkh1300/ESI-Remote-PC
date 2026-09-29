@@ -61,6 +61,19 @@ public static class ProtocolConstants
     /// <summary>Lifetime of a single-use file upload ticket, in seconds.</summary>
     public const int UploadTicketSeconds = 120;
 
+    /// <summary>
+    /// How often the agent tells a phone to poll <c>GET /api/v1/pair/session</c>.
+    /// <para>
+    /// A protocol constant rather than a setting, because two things depend on it agreeing:
+    /// the value handed back in the <c>pair/request</c> response, and the rate-limit budget
+    /// that endpoint is allowed to consume. While it was a literal <c>1000</c> written in
+    /// two files, the rate limit was sized by hand and ended up below what the agent itself
+    /// told phones to do, so a correctly-behaving client was throttled part-way through
+    /// pairing and could not finish.
+    /// </para>
+    /// </summary>
+    public const int PairingPollIntervalMs = 1000;
+
     /// <summary>Name of the service as installed in the Windows SCM.</summary>
     public const string ServiceName = "ESIRemotePcAgent";
 

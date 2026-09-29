@@ -157,7 +157,7 @@ mechanism.
 | `approval` value | Meaning |
 |---|---|
 | `desktop-prompt` | A session agent is connected and a modal dialog has been posted |
-| `tray-or-cli` | No interactive session. The attempt stays pending; approve with `esirc pair approve <code>` |
+| `browser-or-cli` | No interactive session. The attempt stays pending; approve with `esirc pair approve <code>` |
 
 `409` with `esi_conflict` when `maxPairedDevices` is reached.
 

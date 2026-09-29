@@ -106,8 +106,8 @@ What the installer does, in order:
 | 3 | Registers `ESIRemotePcAgent` — `start= auto`, `obj= LocalSystem` |
 | 4 | Sets its description and failure recovery (`restart/5000`, `restart/15000`, `restart/60000`, `reset= 86400`) |
 | 5 | Writes `requiredPrivileges = SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege` to the agent's registry key |
-| 6 | Registers `ESIRemotePcSession` — `start= auto`, `obj=` (per-user) |
-| 7 | Sets its description, the same failure recovery, and `requiredPrivileges = SeIncreaseQuotaPrivilege` |
+| 6 | Registers a **logon-triggered scheduled task** for the session agent, rather than a second Windows service |
+| 7 | Deletes the same task again on uninstall |
 | 8 | Adds two Windows Firewall rules, **private and domain profiles only** |
 | 9 | Starts `ESIRemotePcAgent` |
 | 10 | Runs `esirc status` |
@@ -115,6 +115,15 @@ What the installer does, in order:
 `requiredPrivileges` is undocumented-but-load-bearing. Without it the service account holds
 `SeTcbPrivilege` in a *disabled* state and the first `CreateProcessAsUserW` into the
 console session fails, so the session agent can only be started by the logon path.
+
+Step 6 was a Windows service once, created with an empty `obj=` to make it per-user. The SCM
+rejects that form, and it rejects it *silently* from the installer's point of view: `sc.exe`
+prints to stderr, Inno carries on with an entry that failed, and the result is a
+"successful" install with no session agent and no error. A logon-triggered scheduled task is
+the documented mechanism for running in each interactive session, needs no stored
+credentials, and does not fail quietly. The installer's post-install step queries both the
+SCM and Task Scheduler and logs what is missing, so a partial install cannot look like a
+working one.
 
 Uninstall stops and deletes both services, removes both firewall rules, and deletes
 `{commonappdata}\ESI-RemotePC` in full — certificate, key, device database and logs. There
@@ -293,7 +302,47 @@ sc.exe query ESIRemotePcAgent
 sc.exe query ESIRemotePcSession
 ```
 
-Both should return `ERROR_SERVICE_DOES_NOT_EXIST` (1060).
+Both should return `ERROR_SERVICE_DOES_NOT_EXIST` (1060), and the scheduled task should be
+gone:
+
+```powershell
+schtasks.exe /query /tn "ESI Remote PC Session Agent"
+```
+
+**7. The app and the agent actually talk to each other.** This is the check that is not a
+unit test and not a smoke probe, and every serious defect in the pairing path was found by
+it rather than by anything else. It starts a throwaway agent on a spare port with its own
+data directory — so it needs no administrator rights and does not disturb an installed one —
+and drives the real app code against it:
+
+```powershell
+cd android-app\esi_remote
+dart run tool/live_agent_check.dart `
+  --agent ..\..\windows-agent\artifacts\publish\ESI.RemotePc.Agent.Service.exe `
+  --esirc ..\..\windows-agent\artifacts\publish\ESI.RemotePc.Agent.Cli.exe `
+  --port 48333
+```
+
+Eleven assertions, and each one corresponds to a way the two halves can disagree:
+
+| Step | What it proves |
+|---|---|
+| 1 | A pinned TLS handshake completes, **and a wrong pin is refused** — the second half is the one that matters, since a client that accepts anything is not doing pinning |
+| 2 | The unsigned pre-auth surface answers, and the `spkiSha256` the handshake advertises equals `pinForCertificate` of the certificate actually served, so PROTOCOL.md A2.1 and the agent agree |
+| 3 | `esirc pair approve` works, from the real CLI, not a stub |
+| 4 | An approved attempt releases a wrapped envelope |
+| 5 | **Dart opens an envelope C# produced** — AES-GCM, HKDF and the key generation, across a real key |
+| 6 | **A request signed by Dart is accepted by the agent**, and a replayed nonce is refused with `esi_replay` |
+
+Two of the three worst bugs in this project were invisible to every other check because both
+sides were individually correct and the wiring between them was not: the app signed the
+un-prefixed path while sending the prefixed one, so no signed request could ever verify; and
+the agent bound the `--port` it was given while advertising the default, so a discovered
+agent pointed the phone at a port nothing was listening on. Neither shows up in a unit test,
+because each half is right on its own.
+
+If you extend the protocol, extend this file. It is the only thing in the repository that
+notices when the two implementations stop agreeing.
 
 ---
 

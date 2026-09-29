@@ -182,11 +182,21 @@ void main() {
   });
 
   group('EsiEndpoint', () {
-    test('omits the port when it is the default one', () {
+    test('always spells out the port, including the default one', () {
+      // The port must never be dropped, even when it is the default. An https URL with no
+      // port means 443, and the agent listens on 48220, so omitting it produced a URI that
+      // cannot connect to any real install. The old version of this test asserted the
+      // opposite, which is how the bug survived: the test was written to match the code
+      // rather than the protocol.
       const endpoint = EsiEndpoint(host: '192.168.1.42', port: 48220, pins: <String>[]);
-      expect(endpoint.apiUri('/handshake').toString(), 'https://192.168.1.42/api/v1/handshake');
-      expect(endpoint.wsUri().toString(), 'wss://192.168.1.42/ws');
-      expect(endpoint.displayAddress, '192.168.1.42');
+      expect(endpoint.apiUri('/handshake').toString(),
+          'https://192.168.1.42:48220/api/v1/handshake');
+      expect(endpoint.wsUri().toString(), 'wss://192.168.1.42:48220/ws');
+      expect(endpoint.displayAddress, '192.168.1.42:48220');
+    });
+
+    test('the default port really is 48220, so the case above is the common one', () {
+      expect(EsiProtocol.defaultHttpsPort, 48220);
     });
 
     test('includes a non-default port', () {
@@ -194,6 +204,13 @@ void main() {
       expect(endpoint.apiUri('/handshake').toString(), 'https://pc.local:50000/api/v1/handshake');
       expect(endpoint.wsUri().toString(), 'wss://pc.local:50000/ws');
       expect(endpoint.displayAddress, 'pc.local:50000');
+    });
+
+    test('brackets an IPv6 literal so the port is still the port', () {
+      const endpoint = EsiEndpoint(host: 'fd00::5', port: 48220, pins: <String>[]);
+      expect(endpoint.apiUri('/handshake').toString(),
+          'https://[fd00::5]:48220/api/v1/handshake');
+      expect(endpoint.displayAddress, '[fd00::5]:48220');
     });
 
     test('keeps the raw query in the request URI', () {

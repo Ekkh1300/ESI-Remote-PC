@@ -42,8 +42,9 @@ class PairingProgress {
   final String? userCode;
   final int? expiresAt;
 
-  /// `desktop-prompt` or `tray-or-cli`. The latter means nobody is logged in, so the
-  /// approval has to happen from the tray menu or the CLI.
+  /// `desktop-prompt` or `browser-or-cli`. The latter means nobody is signed in on the PC, so
+  /// there is no desktop to prompt on, and the approval has to happen on the pairing page in
+  /// a browser or from the console.
   final String? approvalMethod;
   final String? deviceName;
   final PairingProgressApproval approval;
@@ -139,8 +140,9 @@ class PairingService {
       approval: PairingProgressApproval.inProgress,
       message: created.approval == 'desktop-prompt'
           ? 'Approve this device in the prompt on ${_hostOf(endpoint)}.'
-          : 'Nobody is signed in on the PC. Approve code ${created.userCode} from the '
-              'ESI Remote PC tray menu, or run: esi-cli pair approve ${created.userCode}',
+          : 'Nobody is signed in on the PC, so there is no prompt to approve. Stop the '
+              'agent, run: esirc pair approve ${created.userCode} , then start the agent '
+              'again. It cannot be approved in a browser on purpose.',
     );
     onProgress(progress);
 
