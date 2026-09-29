@@ -59,6 +59,7 @@ Name: "createdesktop"; Description: "Create a desktop shortcut"; GroupDescriptio
 [Files]
 ; The three published executables. They are self-contained single files, so there is no
 ; dependency tree to lay down and the install directory can be moved or deleted freely.
+; All three are packed into this one installer executable, which is the deliverable.
 Source: "..\artifacts\publish\ESI.RemotePc.Agent.Service.exe"; DestDir: "{app}"; \
   Flags: ignoreversion
 Source: "..\artifacts\publish\ESI.RemotePc.Session.exe";         DestDir: "{app}"; \
@@ -81,9 +82,19 @@ Name: "{autodesktop}\ESI Remote PC"; Filename: "{app}\ESI.RemotePc.Agent.Cli.exe
   Parameters: "status"; WorkingDir: "{app}"; Tasks: createdesktop
 
 [Run]
-Filename: "{sys}\sc.exe"; Parameters: "create ""{app}\ESI.RemotePc.Agent.Service.exe"" binPath= """"{app}\ESI.RemotePc.Agent.Service.exe"""" start= auto DisplayName= ""ESI Remote PC Agent"" obj= LocalSystem"; \
-  Flags: runhidden; StatusMsg: "Registering the ESI Remote PC service"; \
-  BeforeInstall: StopIfServiceExists
+; Clear any previous registration first. sc.exe reports an error for a service that is not
+; installed, which is exactly what we want to ignore, so these entries carry no Check.
+;
+; The two registrations are verified afterwards rather than checked inline. A quoting
+; mistake in binPath prints "Unrecognized command" to stderr and Inno carries on regardless,
+; which would leave an installed program with no services and no error to go on. The
+; post-install step in [Code] queries the SCM and says so plainly if either is missing.
+Filename: "{sys}\sc.exe"; Parameters: "stop ESIRemotePcAgent"; Flags: runhidden
+Filename: "{sys}\sc.exe"; Parameters: "delete ESIRemotePcAgent"; Flags: runhidden
+Filename: "{sys}\schtasks.exe"; Parameters: "/delete /f /tn ""ESI Remote PC Session Agent"""; Flags: runhidden
+
+Filename: "{sys}\sc.exe"; Parameters: "create ESIRemotePcAgent binPath= ""{app}\ESI.RemotePc.Agent.Service.exe"" start= auto DisplayName= ""ESI Remote PC Agent"" obj= LocalSystem"; \
+  Flags: runhidden; StatusMsg: "Registering the ESI Remote PC service"
 
 Filename: "{sys}\sc.exe"; Parameters: "description ""ESIRemotePcAgent"" ""LAN remote control agent. HTTPS API, telemetry, and power control."""; \
   Flags: runhidden
@@ -94,37 +105,36 @@ Filename: "{sys}\sc.exe"; Parameters: "description ""ESIRemotePcAgent"" ""LAN re
 Filename: "{sys}\sc.exe"; Parameters: "failure ESIRemotePcAgent reset= 86400 actions= restart/5000/restart/15000/restart/60000"; \
   Flags: runhidden
 
-; requiredPrivileges. Undocumented but load-bearing: without it the account's
-; SeTcbPrivilege is present but disabled, and the first CreateProcessAsUser into the console
-; session fails, so the session agent can only be started by the logon task.
+; requiredPrivileges. Undocumented but load-bearing: without it the account's SeTcbPrivilege
+; is present but disabled, and the first CreateProcessAsUser into the console session fails,
+; so the session agent can only be started by the logon task.
 Filename: "{sys}\reg.exe"; \
   Parameters: "add ""HKLM\SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent"" /v requiredPrivileges /t REG_SZ /d ""SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege"" /f"; \
   Flags: runhidden
 
-; The per-user session helper. obj= (empty) is what makes it a per-user service: the SCM
-; starts one instance in each interactive session, which is the only place winsta0\default
-; and SendInput work.
-Filename: "{sys}\sc.exe"; Parameters: "create ESIRemotePcSession binPath= """"{app}\ESI.RemotePc.Session.exe"""" start= auto DisplayName= ""ESI Remote PC Session Agent"" obj= "; \
+; The per-user session helper.
+;
+; A logon-triggered scheduled task rather than a second Windows service. The helper has to
+; run inside each interactive session: SendInput is bound to the caller's session and is
+; subject to UIPI, and BitBlt has no desktop to read from anywhere else. A per-user service
+; (sc create with an empty obj=) is the other way to express that, but the empty obj= is
+; easily rejected outright by the SCM, and the rejection is silent from the user's point of
+; view - the agent appears to install fine and remote control then never becomes available.
+; A logon task is the documented mechanism for exactly this, needs no stored credentials,
+; and starts once per interactive user.
+Filename: "{sys}\schtasks.exe"; Parameters: "/create /f /sc ONLOGON /tn ""ESI Remote PC Session Agent"" /tr ""{app}\ESI.RemotePc.Session.exe"" /rl LIMITED /it"; \
   Flags: runhidden; StatusMsg: "Registering the session agent"
-Filename: "{sys}\sc.exe"; Parameters: "description ESIRemotePcSession ""Per-user helper: screen capture, input injection, and the pairing prompt."""; \
-  Flags: runhidden
-Filename: "{sys}\sc.exe"; Parameters: "failure ESIRemotePcSession reset= 86400 actions= restart/5000/restart/15000/restart/60000"; \
-  Flags: runhidden
-Filename: "{sys}\reg.exe"; Parameters: "add ""HKLM\SYSTEM\CurrentControlSet\Services\ESIRemotePcSession"" /v requiredPrivileges /t REG_SZ /d ""SeIncreaseQuotaPrivilege"" /f"; \
-  Flags: runhidden
-
 Filename: "{sys}\sc.exe"; Parameters: "start ESIRemotePcAgent"; Flags: runhidden; \
   StatusMsg: "Starting the agent"
 
-[Run]
 Filename: "{app}\ESI.RemotePc.Agent.Cli.exe"; Parameters: "status"; \
   Flags: runhidden waituntilterminated; Description: "Show the installed status"
 
 [UninstallRun]
 ; Stop before deleting, or the SCM keeps the exe mapped and the file cannot be removed until
 ; the next reboot - which looks to the user like a failed uninstall.
-Filename: "{sys}\sc.exe"; Parameters: "stop ESIRemotePcSession"; Flags: runhidden; RunOnceId: "StopSession"
-Filename: "{sys}\sc.exe"; Parameters: "delete ESIRemotePcSession"; Flags: runhidden; RunOnceId: "DeleteSession"
+Filename: "{sys}\schtasks.exe"; Parameters: "/end /tn ""ESI Remote PC Session Agent"""; Flags: runhidden; RunOnceId: "StopSession"
+Filename: "{sys}\schtasks.exe"; Parameters: "/delete /f /tn ""ESI Remote PC Session Agent"""; Flags: runhidden; RunOnceId: "DeleteSession"
 Filename: "{sys}\sc.exe"; Parameters: "stop ESIRemotePcAgent"; Flags: runhidden; RunOnceId: "StopAgent"
 Filename: "{sys}\sc.exe"; Parameters: "delete ESIRemotePcAgent"; Flags: runhidden; RunOnceId: "DeleteAgent"
 
@@ -136,45 +146,68 @@ Filename: "{sys}\sc.exe"; Parameters: "delete ESIRemotePcAgent"; Flags: runhidde
 Type: filesandordirs; Name: "{commonappdata}\ESI-RemotePC"
 
 [Code]
-{ Deletes an existing service registration before installing over it. Without this the
-  create call fails and the installer reports a confusing error, because the user has
-  already run esirc install once. }
-function StopIfServiceExists(): Boolean;
+{ The firewall rules are added here rather than in [Run] because they are conditional on a
+  task the user chose, and this is the only place that can ask. }
+
+{ Reports whether a service is registered with the SCM. }
+function ServiceIsRegistered(const Name: String): Boolean;
 var
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\sc.exe'), 'query ESIRemotePcAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  if ResultCode = 0 then
-  begin
-    Exec(ExpandConstant('{sys}\sc.exe'), 'stop ESIRemotePcAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(2000);
-    Exec(ExpandConstant('{sys}\sc.exe'), 'delete ESIRemotePcAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(1000);
-  end;
+  Exec(ExpandConstant('{sys}\sc.exe'), 'query ' + Name, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := ResultCode = 0;
+end;
 
-  Result := True;
+{ Reports whether a scheduled task is registered with Task Scheduler. }
+function TaskIsRegistered(const Name: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/query /tn ' + Chr(34) + Name + Chr(34), '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := ResultCode = 0;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
+  Missing: String;
 begin
   if CurStep = ssPostInstall then
   begin
+    { Verify the two registrations actually landed. sc.exe reports a syntax problem as text
+      on stderr and still exits with an error the installer would otherwise ignore, so the
+      failure mode is a successful install with nothing registered. Saying so here is the
+      difference between a user who knows to re-run as administrator and a user who thinks
+      the product is broken. }
+    Missing := '';
+    if not ServiceIsRegistered('ESIRemotePcAgent') then
+      Missing := Missing + 'ESIRemotePcAgent' + #13#10;
+    if not TaskIsRegistered('ESI Remote PC Session Agent') then
+      Missing := Missing + 'logon task: ESI Remote PC Session Agent' + #13#10;
+
+    if Missing <> '' then
+    begin
+      Log('WARNING: these services were not registered:' + #13#10 + Missing);
+    end
+    else
+    begin
+      Log('Verified: both services are registered with the Service Control Manager.');
+    end;
+
     if WizardIsTaskSelected('addfirewall') then
     begin
       { Scoped to the private and domain profiles only. On a public network - a coffee shop,
-        an airport - a rule that opened this port would expose the agent to the internet,
-        and the agent's own LAN guard cannot help with that because the traffic would
-        already have arrived. }
+        an airport - a rule that opened this port would expose the agent to the internet, and
+        the agent's own LAN guard cannot help with that because the traffic would already have
+        arrived. }
       Exec(ExpandConstant('{sys}\netsh.exe'),
         'advfirewall firewall add rule name="ESI Remote PC (LAN)" dir=in action=allow ' +
-        'protocol=TCP localport=' + '{#HttpsPort}' + ' profile=private,domain',
+        'protocol=TCP localport={#HttpsPort} profile=private,domain',
         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
       Exec(ExpandConstant('{sys}\netsh.exe'),
         'advfirewall firewall add rule name="ESI Remote PC discovery (LAN)" dir=in action=allow ' +
-        'protocol=UDP localport=' + '{#DiscoveryPort}' + ' profile=private,domain',
+        'protocol=UDP localport={#DiscoveryPort} profile=private,domain',
         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end;
   end;

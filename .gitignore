@@ -8,6 +8,15 @@ artifacts/
 .vscode/
 .idea/
 
+# Release artifacts
+#
+# The installer EXE and the APK are large binaries that are reproducible from source with
+# `windows-agent\build.ps1` and `iscc`. Committing 300 MB of them to a repository makes every
+# clone worse for no benefit, so they live on disk in release\ and are rebuilt on demand.
+release/*.exe
+release/*.apk
+release/*.msi
+
 # Test output
 [Tt]est[Rr]esult*/
 *.trx
@@ -27,7 +36,6 @@ packages/
 **/android-app/**/.flutter-plugins
 **/android-app/**/.flutter-plugins-dependencies
 **/android-app/**/.packages
-**/android-app/**/pubspec.lock
 **/android-app/**/.pub-cache/
 **/android-app/**/.pub/
 android-app/**/android/.gradle/
@@ -55,7 +63,7 @@ ehthumbs.db
 
 # Secrets that must never be committed, under any circumstances.
 # The agent's identity, TLS key and paired-device secrets all live in ProgramData at runtime;
-# if any of them ever end up in a working tree, the .gitignore below is the last line of
+# if any of them ever end up in a working tree, the entries above are the last line of
 # defence and the leak is the first problem.
 secrets.json
 provisioning-secret
