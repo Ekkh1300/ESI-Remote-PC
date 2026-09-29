@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Esi.Tests</RootNamespace>
+    <AssemblyName>ESI.RemotePc.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      FrameworkReference rather than a package: the tests exercise AgentDatabase, DeviceStore
+      and PairingManager directly, and those depend on the SQLite native provider the shared
+      framework already resolves.
+    -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ESI.RemotePc.Protocol\ESI.RemotePc.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\ESI.RemotePc.Platform\ESI.RemotePc.Platform.csproj" />
+    <ProjectReference Include="..\..\src\ESI.RemotePc.Agent.Core\ESI.RemotePc.Agent.Core.csproj" />
+
+    <!--
+      The integration tests drive the real composition root - the same AgentHost.Main does -
+      on a real socket, so the authenticated surface is exercised end to end rather than
+      against a parallel test host.
+    -->
+    <ProjectReference Include="..\..\src\ESI.RemotePc.Agent.Service\ESI.RemotePc.Agent.Service.csproj" />
+  </ItemGroup>
+
+</Project>

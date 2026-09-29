@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The app is dark-only, so the launch window is dark in both OS modes; otherwise
+         a white flash appears before the first Flutter frame. -->
+    <color name="esi_void">#05070C</color>
+
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+
+    <!-- Applied to the Android Window as soon as the process has started; this is what
+         sits behind the Flutter UI. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@color/esi_void</item>
+    </style>
+</resources>

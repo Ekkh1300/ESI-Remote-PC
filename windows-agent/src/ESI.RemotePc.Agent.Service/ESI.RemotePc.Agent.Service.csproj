@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Esi.Service</RootNamespace>
+    <AssemblyName>ESI.RemotePc.Agent.Service</AssemblyName>
+
+    <!--
+      Self-contained single-file publish. This is a deliberate product decision, not a
+      build preference: the agent must install and run on a machine with no .NET runtime
+      at all, and must not break when the machine's shared runtime is upgraded or removed.
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Serilog.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The agent is a Worker SDK project, so ASP.NET Core is opted into explicitly. It is
+      used purely as a Kestrel-hosted API surface: no MVC, no Razor, and no container
+      beyond the standard host's own dependency injection.
+    -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ESI.RemotePc.Protocol\ESI.RemotePc.Protocol.csproj" />
+    <ProjectReference Include="..\ESI.RemotePc.Platform\ESI.RemotePc.Platform.csproj" />
+    <ProjectReference Include="..\ESI.RemotePc.Agent.Core\ESI.RemotePc.Agent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ESI.RemotePc.Tests" />
+  </ItemGroup>
+
+</Project>

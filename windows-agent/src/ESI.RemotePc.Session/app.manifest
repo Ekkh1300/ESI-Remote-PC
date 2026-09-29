@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="ESI.RemotePc.Session" />
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <!--
+          asInvoker on purpose. The session agent runs inside the logged-on user's own
+          session, and the interactive desktop is the only thing that makes it work; asking
+          for elevation would pop a UAC prompt at every logon for no benefit. Everything that
+          genuinely needs LocalSystem (shutting down, changing power state, launching into
+          another session) is done by the Windows service, not by this process.
+        -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 / 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!--
+        longPathAware only. The DPI awareness is set through the ApplicationHighDpiMode
+        MSBuild property and ApplicationConfiguration, not here: WinForms sets the process
+        DPI awareness from managed code, and doing it in both places produces WFO0003 and a
+        warning that one of them is being ignored.
+      -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

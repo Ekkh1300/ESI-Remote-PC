@@ -1,0 +1,13 @@
+global using Esi.Core;
+global using Esi.Core.Notifications;
+global using Esi.Core.Security;
+global using Esi.Core.Storage;
+global using Esi.Platform;
+global using Esi.Platform.Discovery;
+global using Esi.Protocol;
+global using Esi.Service;
+global using Microsoft.AspNetCore.Builder;
+global using Microsoft.AspNetCore.Http;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Hosting;
+global using Microsoft.Extensions.Logging;

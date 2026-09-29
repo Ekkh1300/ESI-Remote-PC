@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Matches EsiPalette.void so the handoff from the launch window to the Flutter UI is
+         seamless. A faint horizon gradient hints at the telemetry band without an image. -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#080C14"
+                android:centerColor="#05070C"
+                android:endColor="#05070C"
+                android:type="linear" />
+        </shape>
+    </item>
+</layer-list>

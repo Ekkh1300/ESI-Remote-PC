@@ -1,0 +1,155 @@
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Esi.Protocol;
+
+/// <summary>
+/// Client → server WebSocket control frame. Mirrors docs/PROTOCOL.md §7.2.
+/// </summary>
+public sealed class WsClientFrame
+{
+    [JsonPropertyName("p")] public int P { get; set; } = ProtocolConstants.Version;
+    [JsonPropertyName("t")] public string T { get; set; } = "";
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("ts")] public long? Ts { get; set; }
+    [JsonPropertyName("channels")] public List<string>? Channels { get; set; }
+    [JsonPropertyName("displayId")] public int? DisplayId { get; set; }
+    [JsonPropertyName("fps")] public int? Fps { get; set; }
+    [JsonPropertyName("quality")] public int? Quality { get; set; }
+    [JsonPropertyName("grid")] public int[]? Grid { get; set; }
+    [JsonPropertyName("inputEnabled")] public bool? InputEnabled { get; set; }
+    [JsonPropertyName("intervalMs")] public int? IntervalMs { get; set; }
+    [JsonPropertyName("input")] public RemoteInputRequest? Input { get; set; }
+    [JsonPropertyName("code")] public string? Code { get; set; }
+    [JsonPropertyName("text")] public string? Text { get; set; }
+    [JsonPropertyName("down")] public bool? Down { get; set; }
+    [JsonPropertyName("mods")] public List<string>? Mods { get; set; }
+    [JsonPropertyName("sequence")] public long? Sequence { get; set; }
+}
+
+/// <summary>Server → client WebSocket control frame. Mirrors docs/PROTOCOL.md §7.5.</summary>
+public sealed class WsServerFrame
+{
+    [JsonPropertyName("p")] public int P { get; set; } = ProtocolConstants.Version;
+    [JsonPropertyName("t")] public string T { get; set; } = "";
+    [JsonPropertyName("id")] public string? Id { get; set; }
+    [JsonPropertyName("ts")] public long? Ts { get; set; }
+    [JsonPropertyName("data")] public object? Data { get; set; }
+    [JsonPropertyName("code")] public string? Code { get; set; }
+    [JsonPropertyName("message")] public string? Message { get; set; }
+
+    public static WsServerFrame Of(string type, string? id = null, object? data = null)
+        => new() { T = type, Id = id, Data = data, Ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds() };
+}
+
+/// <summary>
+/// Fixed 32-byte header that prefixes every binary screen-stream frame.
+/// Layout is fixed and little-endian; see docs/PROTOCOL.md §7.5.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct ScreenFrameHeader
+{
+    /// <summary>'E','S','I','V' in that byte order.</summary>
+    public uint Magic;              // offset 0
+    public ushort FrameType;        // offset 4
+    public ushort DisplayId;        // offset 6
+    public uint FrameIndex;         // offset 8
+    public ushort TileCount;        // offset 12
+    public ushort Codec;            // offset 14
+    public int ScreenWidth;         // offset 16
+    public int ScreenHeight;        // offset 20
+    public ushort GridCols;         // offset 24
+    public ushort GridRows;         // offset 26
+    public uint PayloadLength;      // offset 28
+
+    public const uint ExpectedMagic = 0x56495345; // "ESIV" little-endian
+    public const int Size = 32;
+
+    public static ScreenFrameHeader Keyframe(uint index, ushort displayId, int w, int h, ushort cols, ushort rows, ushort tiles, uint payloadLen)
+        => new() { Magic = ExpectedMagic, FrameType = FrameTypes.Keyframe, DisplayId = displayId, FrameIndex = index,
+                   TileCount = tiles, Codec = Codecs.Jpeg, ScreenWidth = w, ScreenHeight = h,
+                   GridCols = cols, GridRows = rows, PayloadLength = payloadLen };
+
+    public static ScreenFrameHeader TileUpdate(uint index, ushort displayId, int w, int h, ushort cols, ushort rows, ushort tiles, uint payloadLen)
+        => new() { Magic = ExpectedMagic, FrameType = FrameTypes.TileUpdate, DisplayId = displayId, FrameIndex = index,
+                   TileCount = tiles, Codec = Codecs.Jpeg, ScreenWidth = w, ScreenHeight = h,
+                   GridCols = cols, GridRows = rows, PayloadLength = payloadLen };
+
+    public static ScreenFrameHeader ResyncRequest(uint index, ushort displayId, ushort tiles, uint payloadLen)
+        => new() { Magic = ExpectedMagic, FrameType = FrameTypes.ResyncRequest, DisplayId = displayId, FrameIndex = index,
+                   TileCount = tiles, Codec = Codecs.Jpeg, PayloadLength = payloadLen };
+
+    public byte[] ToBytes()
+    {
+        var b = new byte[Size];
+        BitConverter.TryWriteBytes(b.AsSpan(0, 4), Magic);
+        BitConverter.TryWriteBytes(b.AsSpan(4, 2), FrameType);
+        BitConverter.TryWriteBytes(b.AsSpan(6, 2), DisplayId);
+        BitConverter.TryWriteBytes(b.AsSpan(8, 4), FrameIndex);
+        BitConverter.TryWriteBytes(b.AsSpan(12, 2), TileCount);
+        BitConverter.TryWriteBytes(b.AsSpan(14, 2), Codec);
+        BitConverter.TryWriteBytes(b.AsSpan(16, 4), ScreenWidth);
+        BitConverter.TryWriteBytes(b.AsSpan(20, 4), ScreenHeight);
+        BitConverter.TryWriteBytes(b.AsSpan(24, 2), GridCols);
+        BitConverter.TryWriteBytes(b.AsSpan(26, 2), GridRows);
+        BitConverter.TryWriteBytes(b.AsSpan(28, 4), PayloadLength);
+        return b;
+    }
+}
+
+public static class FrameTypes
+{
+    public const ushort Keyframe = 1;
+    public const ushort TileUpdate = 2;
+    public const ushort ResyncRequest = 3;
+}
+
+public static class Codecs
+{
+    public const ushort Jpeg = 1;
+    /// <summary>Reserved for the future: a real RDP graphics pipeline / RemoteFX style codec.</summary>
+    public const ushort RdpGraphicsPipeline = 2;
+}
+
+/// <summary>Per-tile descriptor that precedes each tile's JPEG payload.</summary>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct TileDescriptor
+{
+    public ushort Col;         // offset 0
+    public ushort Row;         // offset 2
+    public ushort TileWidth;   // offset 4
+    public ushort TileHeight;  // offset 6
+    public uint TileLength;    // offset 8
+
+    public const int Size = 14;
+
+    public byte[] ToBytes()
+    {
+        var b = new byte[Size];
+        BitConverter.TryWriteBytes(b.AsSpan(0, 2), Col);
+        BitConverter.TryWriteBytes(b.AsSpan(2, 2), Row);
+        BitConverter.TryWriteBytes(b.AsSpan(4, 2), TileWidth);
+        BitConverter.TryWriteBytes(b.AsSpan(6, 2), TileHeight);
+        BitConverter.TryWriteBytes(b.AsSpan(8, 4), TileLength);
+        return b;
+    }
+}
+
+/// <summary>Shared JSON settings for the wire protocol.</summary>
+public static class ProtocolJson
+{
+    public static readonly JsonSerializerOptions Options = Create();
+
+    public static JsonSerializerOptions Create()
+    {
+        var o = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = null, // every DTO carries explicit [JsonPropertyName]
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            NumberHandling = JsonNumberHandling.AllowReadingFromString,
+            Converters = { new JsonStringEnumConverter() },
+        };
+        return o;
+    }
+}

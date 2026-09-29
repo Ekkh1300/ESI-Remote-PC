@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Esi.Session</RootNamespace>
+    <AssemblyName>ESI.RemotePc.Session</AssemblyName>
+
+    <!--
+      Self-contained single file, for the same reason the agent is: the session helper is
+      launched by the Windows SCM (or by a logon task) on machines the user knows nothing
+      about, and a missing shared runtime must not turn a working PC into a broken one.
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The Agent.Service and the Session agent both consume the same Serilog sinks, so they
+      cannot drift in how they log. The Hosting package itself is not referenced: the
+      FrameworkReference below already provides it, and referencing both earns a NU1510.
+    -->
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ESI.RemotePc.Protocol\ESI.RemotePc.Protocol.csproj" />
+    <ProjectReference Include="..\ESI.RemotePc.Platform\ESI.RemotePc.Platform.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ESI.RemotePc.Tests" />
+  </ItemGroup>
+
+</Project>

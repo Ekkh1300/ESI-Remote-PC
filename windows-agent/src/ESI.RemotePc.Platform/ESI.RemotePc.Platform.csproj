@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Esi.Platform</RootNamespace>
+    <AssemblyName>ESI.RemotePc.Platform</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      System.Drawing.Common is Windows-only from .NET 6 onwards and is used for the
+      JPEG encode step in the screen stream. It is referenced here rather than in the
+      session agent so the encoder can be unit tested without a desktop session.
+    -->
+    <PackageReference Include="System.Drawing.Common" />
+    <PackageReference Include="System.Management" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ESI.RemotePc.Protocol\ESI.RemotePc.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The session agent is the same product as the service, and it needs the same P/Invoke
+      declarations: it is the process that actually sits on winsta0\default and calls
+      WTSRegisterSessionNotification, LockWorkStation and SendInput. Re-declaring those here
+      would guarantee the two copies drift.
+    -->
+    <InternalsVisibleTo Include="ESI.RemotePc.Session" />
+    <InternalsVisibleTo Include="ESI.RemotePc.Tests" />
+  </ItemGroup>
+
+</Project>

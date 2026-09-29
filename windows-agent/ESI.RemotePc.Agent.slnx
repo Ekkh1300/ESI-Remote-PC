@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ESI.RemotePc.Agent.Cli/ESI.RemotePc.Agent.Cli.csproj" />
+    <Project Path="src/ESI.RemotePc.Agent.Core/ESI.RemotePc.Agent.Core.csproj" />
+    <Project Path="src/ESI.RemotePc.Agent.Service/ESI.RemotePc.Agent.Service.csproj" />
+    <Project Path="src/ESI.RemotePc.Platform/ESI.RemotePc.Platform.csproj" />
+    <Project Path="src/ESI.RemotePc.Protocol/ESI.RemotePc.Protocol.csproj" />
+    <Project Path="src/ESI.RemotePc.Session/ESI.RemotePc.Session.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ESI.RemotePc.Tests/ESI.RemotePc.Tests.csproj" />
+  </Folder>
+</Solution>

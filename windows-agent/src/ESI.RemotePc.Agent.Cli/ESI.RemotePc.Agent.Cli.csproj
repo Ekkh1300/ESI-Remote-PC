@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Esi.Cli</RootNamespace>
+    <AssemblyName>ESI.RemotePc.Agent.Cli</AssemblyName>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ServiceController for the SCM queries. Creation and deletion go through sc.exe, because
+      the managed API was deprecated for creation in .NET 9 and cannot set a service
+      description, an account, or failure-recovery actions.
+    -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
+
+    <!--
+      The CLI composes the agent's own services (AgentDatabase, DeviceStore, PairingManager)
+      rather than reimplementing the schema or the pairing state machine. That is the whole
+      point: two implementations of a credential store are two chances to get the security
+      wrong, and only one of them would get the attention.
+    -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ESI.RemotePc.Protocol\ESI.RemotePc.Protocol.csproj" />
+    <ProjectReference Include="..\ESI.RemotePc.Platform\ESI.RemotePc.Platform.csproj" />
+    <ProjectReference Include="..\ESI.RemotePc.Agent.Core\ESI.RemotePc.Agent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ESI.RemotePc.Tests" />
+  </ItemGroup>
+
+</Project>

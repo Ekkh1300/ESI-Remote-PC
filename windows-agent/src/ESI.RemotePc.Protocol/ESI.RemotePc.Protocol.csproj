@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Esi.Protocol</RootNamespace>
+    <AssemblyName>ESI.RemotePc.Protocol</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ESI.RemotePc.Tests" />
+  </ItemGroup>
+
+</Project>

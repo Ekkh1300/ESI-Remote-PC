@@ -1,0 +1,74 @@
+name: esi_remote
+description: "ESI Remote PC — LAN remote control for your Windows machine."
+publish_to: "none"
+
+# The version is part of the pairing handshake body (`appVersion`), so it must stay in
+# sync with what the Windows agent reports for itself.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- Wire protocol -------------------------------------------------------------
+  http: 1.6.0                     # REST; IOClient is used so the pinning HttpClient applies.
+  web_socket_channel: 3.0.3       # /ws upgrade; custom HttpClient for TLS pinning.
+  crypto: 3.0.7                   # SHA-256, HMAC-SHA256, HKDF for request signing.
+  cryptography: 2.9.0             # AES-256-GCM to unwrap `wrappedSecrets`. See README.
+
+  # --- App -----------------------------------------------------------------------
+  flutter_riverpod: 3.4.3         # Notifier-based API (StateNotifier is gone in 3.x).
+  flutter_secure_storage: 11.2.0  # Device list + master secrets.
+  go_router: 18.0.2
+  mobile_scanner: 7.4.2           # Pairing QR.
+  fl_chart: 1.2.0                 # Load history, gaming FPS.
+  flutter_foreground_task: 11.0.3 # Keeps the screen stream alive off-screen.
+  file_picker: 13.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+
+# `path_provider_android` 2.3.x pulls in `jni`, which needs the NDK and CMake 3.22.1 to
+# build its native bridge. Nothing in this app uses path_provider on Android —
+# `flutter_secure_storage` only depends on it for its Windows implementation — so pinning
+# back to the last release without the native dependency keeps the Android build free of a
+# toolchain it has no other use for. Remove once CMake is available in the SDK.
+dependency_overrides:
+  path_provider_android: 2.2.23
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    # Display / UI voice: a technical grotesque with slightly odd, machine-drawn
+    # proportions. Not the Material default.
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk-300.ttf
+          weight: 300
+        - asset: assets/fonts/SpaceGrotesk-400.ttf
+          weight: 400
+        - asset: assets/fonts/SpaceGrotesk-500.ttf
+          weight: 500
+        - asset: assets/fonts/SpaceGrotesk-600.ttf
+          weight: 600
+        - asset: assets/fonts/SpaceGrotesk-700.ttf
+          weight: 700
+    # Data voice: every number in this app is a readout, so numbers get their own face.
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-300.ttf
+          weight: 300
+        - asset: assets/fonts/JetBrainsMono-400.ttf
+          weight: 400
+        - asset: assets/fonts/JetBrainsMono-500.ttf
+          weight: 500
+        - asset: assets/fonts/JetBrainsMono-600.ttf
+          weight: 600
+        - asset: assets/fonts/JetBrainsMono-700.ttf
+          weight: 700

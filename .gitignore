@@ -1,0 +1,63 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+artifacts/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+
+# Test output
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+coverage*.xml
+coverage*.json
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+# Flutter / Dart
+**/android-app/**/build/
+**/android-app/**/.dart_tool/
+**/android-app/**/.flutter-plugins
+**/android-app/**/.flutter-plugins-dependencies
+**/android-app/**/.packages
+**/android-app/**/pubspec.lock
+**/android-app/**/.pub-cache/
+**/android-app/**/.pub/
+android-app/**/android/.gradle/
+android-app/**/android/local.properties
+android-app/**/android/app/debug/
+android-app/**/android/app/profile/
+android-app/**/android/app/release/
+android-app/**/*.iml
+
+# The agent's own runtime data, in case someone runs it from a source checkout
+*.db
+*.db-shm
+*.db-wal
+*.pfx
+*.pem
+*.key
+logs/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+*.lnk
+
+# Secrets that must never be committed, under any circumstances.
+# The agent's identity, TLS key and paired-device secrets all live in ProgramData at runtime;
+# if any of them ever end up in a working tree, the .gitignore below is the last line of
+# defence and the leak is the first problem.
+secrets.json
+provisioning-secret
+*.key.pem
+id_ed25519
