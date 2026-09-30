@@ -310,6 +310,15 @@ registered but could not be started, a logon task that could never fire, an upgr
 failed on locked files, and an uninstall that reported success while leaving 139 MB behind.
 All four look identical to a user — installed, and nothing happens.
 
+It does not pass cleanly on a machine where somebody is signed in, for a reason worth
+stating rather than hiding: the session helper holds the agent's service handle open, so
+`sc delete` only marks the key and the wait for it to disappear times out. The installer
+recovers and logs exactly what it saw, so the run is correct but slow and it prints a
+warning that overstates the problem. See `ROADMAP.md` **D19** and
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — *Installing or reinstalling is slow*. The fix
+is to stop the helper before the file copy, which the installer already tries; what is
+missing is that the agent's shutdown should not be waiting on the pipe at all.
+
 By hand, on a throwaway VM: install, `esirc status`, open
 `https://localhost:48220/pairing`, confirm the device id on the page matches the console
 output of `esirc status`, then uninstall and confirm `{commonappdata}\ESI-RemotePC` is gone

@@ -149,6 +149,26 @@ different build — and every request then fails, see the next section.
 | A key rotation was never delivered | `401 esi_signature` right after a rotation | The `wrappedSecrets` envelope was never applied by the phone. See [`SECURITY.md`](SECURITY.md) §6 — there is no automated recovery path |
 | The phone's clock is fine but the nonce is stale | `401 esi_replay` on a request that was retried | A retried request reuses its nonce. Generate a fresh nonce per attempt |
 
+### Installing or reinstalling is slow, or says to reboot
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| The installer takes 30 s or more, then the setup log says *"the previous ESIRemotePcAgent was still registered 30 s after being stopped and deleted, so the new one could not take its place. Reboot, then run this installer again"* | **The session helper is holding the agent's service handle open.** `sc delete` on a service with an open handle only *marks* the key for deletion, so the replacement cannot be created and `sc start` answers 87. The helper is a client on the command pipe, and the agent's pipe has `maxNumberOfServerInstances: 1`; the agent's shutdown does not need the pipe but has been waiting for it. Known defect, `ROADMAP.md` **D19** | It usually still succeeds — check `esirc status` before believing the warning. To get a clean run, stop the helper first: `schtasks /end /tn "ESI Remote PC Session Agent"`, then re-run the installer. The installer re-registers and starts the task afterwards |
+| `sc start ESIRemotePcAgent` → `FAILED 87: The parameter is incorrect` | The service is in the delete-pending state, so it cannot be started | Same as above: end the session task, then `sc delete` (it will complete this time), then re-run the installer |
+| The agent is registered but not answering, and `esirc status` says `Stopped` | The service was never started, or was left stopped | `sc start ESIRemotePcAgent`, then check `C:\ProgramData\ESI-RemotePC\logs` for why it stopped |
+
+The installer's own post-install check reports all of this rather than sitting on it, so
+the setup log is the first place to look:
+
+```powershell
+# re-run with a log, quoting the path (an unquoted path containing a space is silently dropped)
+& "$env:ProgramFiles\ESI Remote PC\unins000.exe" /VERYSILENT /LOG="$env:TEMP\esi-uninstall.log"
+```
+
+The whole cycle is automated — `installer\install-cycle-test.ps1` runs install, reinstall,
+uninstall and reinstall-again, and asserts 26 things about the result. See
+[`BUILD.md`](BUILD.md) §6.
+
 ---
 
 ## Remote control: session agent not connected
@@ -158,7 +178,7 @@ different build — and every request then fails, see the next section.
 The exact message from `RemoteService.SendInput`:
 
 > Remote input needs the per-user session agent, which is not running. Log in to the PC (or
-> start 'ESI Remote PC Session') and try again.
+> start the logon task 'ESI Remote PC Session Agent') and try again.
 
 `POST /api/v1/remote/input` returns `409` with that in `detail`. `GET /api/v1/remote/session`
 gives the state:
@@ -176,15 +196,18 @@ Diagnose in this order.
 **1. Is anybody logged in?** `NoUserSession` at a login screen is the correct answer. There
 is no desktop to inject into.
 
-**2. Is the per-user service there and running?**
+**2. Is the per-user helper there and running?**
+
+It is a logon-triggered scheduled task, not a second Windows service — see the note in §1.
 
 ```powershell
-sc.exe query ESIRemotePcSession
+schtasks.exe /query /tn "ESI Remote PC Session Agent" /fo LIST /v
+Get-Process -Name ESI.RemotePc.Session -ErrorAction SilentlyContinue
 ```
 
-It is registered at install time but only **starts at logon**, so `Stopped` immediately
-after a reboot is normal. `not installed` means re-run `esirc install` without
-`--no-session-agent`.
+`Status: Ready` after a reboot means the trigger has not fired yet, which is normal until
+somebody signs in. `ERROR: cannot find the file` means the task is not registered; the
+installer registers it, and `esirc task register` will do it on its own.
 
 **3. Is `SeTcbPrivilege` present?**
 

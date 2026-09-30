@@ -245,12 +245,25 @@ Test-Step '3. install AGAIN, over its own output (the upgrade path)' {
     # This is the case that used to fail. `sc stop` is asynchronous and `sc delete` on a
     # running service only marks the key, so an un-waited create failed 1073 silently and
     # start then failed 87, leaving a registered service that never ran.
+    #
+    # It is slower than it should be: the session helper from step 2 holds the agent's
+    # service handle open, so the installer's wait for the key to disappear times out at
+    # 30 s. That is ROADMAP D19, and it is why the timing below is a ceiling rather than a
+    # target. The run still has to end with a working agent, which is the part that matters.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
     $code = Invoke-Setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+    $elapsed = $sw.Elapsed.TotalSeconds
+
     Assert-That 'the installer reported success' ($code -eq 0) "exit code $code"
     Test-AgentState
     Test-AgentServing 'reinstall' | Out-Null
     Test-Description
     Test-FailureActions
+
+    if ($elapsed -gt 90) {
+        Write-Host "   note  the reinstall took $([math]::Round($elapsed))s; the session helper" -ForegroundColor Yellow
+        Write-Host '         holds the service handle (ROADMAP D19), so the SCM wait times out.'
+    }
 }
 
 Test-Step '4. uninstall' {
