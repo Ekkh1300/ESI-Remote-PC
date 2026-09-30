@@ -86,51 +86,14 @@ Name: "{autodesktop}\ESI Remote PC"; Filename: "{app}\ESI.RemotePc.Agent.Cli.exe
   Parameters: "status"; WorkingDir: "{app}"; Tasks: createdesktop
 
 [Run]
-; Clear any previous registration first. sc.exe reports an error for a service that is not
-; installed, which is exactly what we want to ignore, so these entries carry no Check.
+; Service registration is not here. It is in RegisterEverything, in [Code], because the
+; sequence has to wait for the SCM between each step and a [Run] entry cannot.
 ;
-; The two registrations are verified afterwards rather than checked inline. A quoting
-; mistake in binPath prints "Unrecognized command" to stderr and Inno carries on regardless,
-; which would leave an installed program with no services and no error to go on. The
-; post-install step in [Code] queries the SCM and says so plainly if either is missing.
-Filename: "{sys}\sc.exe"; Parameters: "stop ESIRemotePcAgent"; Flags: runhidden
-Filename: "{sys}\sc.exe"; Parameters: "delete ESIRemotePcAgent"; Flags: runhidden
-Filename: "{sys}\schtasks.exe"; Parameters: "/delete /f /tn ""ESI Remote PC Session Agent"""; Flags: runhidden
-
-Filename: "{sys}\sc.exe"; Parameters: "create ESIRemotePcAgent binPath= ""{app}\ESI.RemotePc.Agent.Service.exe"" start= auto DisplayName= ""ESI Remote PC Agent"" obj= LocalSystem"; \
-  Flags: runhidden; StatusMsg: "Registering the ESI Remote PC service"
-
-Filename: "{sys}\sc.exe"; Parameters: "description ""ESIRemotePcAgent"" ""LAN remote control agent. HTTPS API, telemetry, and power control."""; \
-  Flags: runhidden
-
-; Failure recovery. Without it a crash of the HTTPS listener leaves the machine unreachable
-; until somebody walks over to it. Three escalating delays: a transient port conflict
-; deserves a fast retry, a persistent failure deserves not to spin.
-Filename: "{sys}\sc.exe"; Parameters: "failure ESIRemotePcAgent reset= 86400 actions= restart/5000/restart/15000/restart/60000"; \
-  Flags: runhidden
-
-; requiredPrivileges. Undocumented but load-bearing: without it the account's SeTcbPrivilege
-; is present but disabled, and the first CreateProcessAsUser into the console session fails,
-; so the session agent can only be started by the logon task.
-Filename: "{sys}\reg.exe"; \
-  Parameters: "add ""HKLM\SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent"" /v requiredPrivileges /t REG_SZ /d ""SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege"" /f"; \
-  Flags: runhidden
-
-; The per-user session helper.
-;
-; A logon-triggered scheduled task rather than a second Windows service. The helper has to
-; run inside each interactive session: SendInput is bound to the caller's session and is
-; subject to UIPI, and BitBlt has no desktop to read from anywhere else. A per-user service
-; (sc create with an empty obj=) is the other way to express that, but the empty obj= is
-; easily rejected outright by the SCM, and the rejection is silent from the user's point of
-; view - the agent appears to install fine and remote control then never becomes available.
-; A logon task is the documented mechanism for exactly this, needs no stored credentials,
-; and starts once per interactive user.
-Filename: "{sys}\schtasks.exe"; Parameters: "/create /f /sc ONLOGON /tn ""ESI Remote PC Session Agent"" /tr ""{app}\ESI.RemotePc.Session.exe"" /rl LIMITED /it"; \
-  Flags: runhidden; StatusMsg: "Registering the session agent"
-Filename: "{sys}\sc.exe"; Parameters: "start ESIRemotePcAgent"; Flags: runhidden; \
-  StatusMsg: "Starting the agent"
-
+; Specifically: `sc stop` is asynchronous, and `sc delete` on a service that is still running
+; or that any handle is still open to marks the key for deletion instead of removing it. Run
+; without waits in between, the sequence reliably ends with `create` failing 1073 (silently,
+; because nothing is checking it) and `start` failing 87, leaving a registered service that
+; never runs. See WaitForServiceGone.
 Filename: "{app}\ESI.RemotePc.Agent.Cli.exe"; Parameters: "status"; \
   Flags: runhidden waituntilterminated; Description: "Show the installed status"
 
@@ -153,6 +116,27 @@ Type: filesandordirs; Name: "{commonappdata}\ESI-RemotePC"
 { The firewall rules are added here rather than in [Run] because they are conditional on a
   task the user chose, and this is the only place that can ask. }
 
+{ Problems found while installing, so the post-install step can report them instead of
+  only checking that things exist. Newline-separated, kept in a plain string because Inno's
+  Pascal Script has no way to construct a string list and a list of one field is not worth
+  the contortions. }
+var
+  InstallProblems: String;
+
+{ Kept in step with #define HttpsPort above by hand, because Pascal Script cannot read an
+  ISPP constant and the completion message quotes this number to the user. }
+const
+  HttpsPortNumber = 48220;
+
+{ Records one problem found while installing. Newline-separated, so the completion message
+  and the log can both print the lot without a list type. }
+procedure AddProblem(const Detail: String);
+begin
+  if InstallProblems <> '' then
+    InstallProblems := InstallProblems + #13#10;
+  InstallProblems := InstallProblems + '- ' + Detail;
+end;
+
 { Reports whether a service is registered with the SCM. }
 function ServiceIsRegistered(const Name: String): Boolean;
 var
@@ -171,18 +155,243 @@ begin
   Result := ResultCode = 0;
 end;
 
+{ Runs a sc.exe subcommand and returns its exit code. }
+function ScExitCode(const Args: String): Integer;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\sc.exe'), Args, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := ResultCode;
+end;
+
+{ Waits until a service is no longer registered, or until the deadline.
+  <para>
+  This is the step the installer was missing. `sc delete` on a service that is still running
+  marks the key for deletion instead of removing it, and the key only disappears once the
+  last handle to it closes. Creating the replacement in the meantime fails with 1073, and
+  with nothing watching for that the install carries on and leaves a registered service that
+  cannot be started - which is exactly what a user sees when they install over a copy that is
+  already there, and then report that the program does not open.
+  </para> }
+function WaitForServiceGone(const Name: String): Boolean;
+var
+  AttemptsLeft: Integer;
+begin
+  { A countdown rather than a deadline: Inno's Pascal Script has Sleep but no clock to
+    compare against, and 120 x 250 ms is the 30 seconds the message promises. }
+  AttemptsLeft := 120;
+  while ServiceIsRegistered(Name) do
+  begin
+    AttemptsLeft := AttemptsLeft - 1;
+    if AttemptsLeft <= 0 then
+    begin
+      AddProblem('the previous ' + Name + ' was still registered 30 s after being ' +
+        'stopped and deleted, so the new one could not take its place. Reboot, then run ' +
+        'this installer again.');
+      Log('WARNING: timed out waiting for ' + Name + ' to disappear from the SCM.');
+      Result := False;
+      Exit;
+    end;
+    Sleep(250);
+  end;
+  Result := True;
+end;
+
+{ Whether the agent is actually serving, by connecting to its HTTPS port.
+  <para>
+  This is deliberately not a check on the SCM's idea of the service state. What the user
+  needs to know is whether the agent is answering, and that is the only question the SCM's
+  state does not answer: a service can be RUNNING for ten seconds and then crash, and a
+  registered-but-stopped service answers nothing at all. Inno's Pascal Script here has only
+  the five-argument form of Exec, with no way to read a command's output, so the probe is
+  done by a second process and judged on its exit code.
+  </para> }
+function AgentIsServing: Boolean;
+var
+  ResultCode: Integer;
+begin
+  { The TCP probe is done with PowerShell, which is present on every machine this installer
+    supports and whose exit code is the connection result. }
+  Exec(ExpandConstant('{cmd}'),
+       '/c powershell -NoProfile -NonInteractive -Command "' +
+       'try { $c = New-Object Net.Sockets.TcpClient; $c.Connect(''127.0.0.1'',' +
+       IntToStr(HttpsPortNumber) + '); exit 0 } catch { exit 1 }"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  Result := ResultCode = 0;
+end;
+
+{ Waits until the agent answers on its port, and says so plainly if it never does.
+  <para>
+  This is the check that would have caught the bug where a reinstall left a registered but
+  permanently stopped service: the install reported success, services.msc showed the agent
+  there, and nothing was listening. A post-install step that only asks the SCM whether the
+  service exists cannot tell that apart from a working install.
+  </para> }
+function WaitForAgentServing: Boolean;
+var
+  AttemptsLeft: Integer;
+begin
+  { 90 x 500 ms. The countdown stands in for a deadline because Inno's Pascal Script has
+    Sleep but no clock function to compare against. }
+  AttemptsLeft := 90;
+  while True do
+  begin
+    if AgentIsServing then
+    begin
+      Result := True;
+      Exit;
+    end;
+
+    AttemptsLeft := AttemptsLeft - 1;
+    if AttemptsLeft <= 0 then
+    begin
+      AddProblem('the agent is not answering on port ' + IntToStr(HttpsPortNumber) +
+        ' 45 s after the install started it. The service is' +
+        ' registered, so this is a failure inside the agent rather than a failed install: ' +
+        'check C:\ProgramData\ESI-RemotePC\logs for the reason, and run' +
+        ' "esirc status" from ' + ExpandConstant('{app}') + '.');
+      Log('WARNING: the agent never answered on its port after the install.');
+      Result := False;
+      Exit;
+    end;
+
+    Sleep(500);
+  end;
+end;
+
+{ Registers the agent service and the session agent's logon task, replacing whatever was
+  there before, and starts the agent. Each step's exit code is checked, because a silent
+  failure here is what makes an install report success and leave nothing working. }
+procedure RegisterEverything;
+var
+  ResultCode: Integer;
+  Q: Char;
+begin
+  { ---- Remove the previous registration, and wait for it to actually be gone ---- }
+  Q := '"';
+
+  Exec(ExpandConstant('{sys}\sc.exe'), 'stop ESIRemotePcAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  WaitForServiceGone('ESIRemotePcAgent');
+
+  Exec(ExpandConstant('{sys}\sc.exe'), 'delete ESIRemotePcAgent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  WaitForServiceGone('ESIRemotePcAgent');
+
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/end /tn ' + Q + 'ESI Remote PC Session Agent' + Q,
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/delete /f /tn ' + Q + 'ESI Remote PC Session Agent' + Q,
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { ---- Create the agent ---- }
+  ResultCode := ScExitCode('create ESIRemotePcAgent binPath= ' + Q +
+    ExpandConstant('{app}\ESI.RemotePc.Agent.Service.exe') + Q + ' start= auto DisplayName= ' +
+    Q + 'ESI Remote PC Agent' + Q + ' obj= LocalSystem');
+
+  { 1073 is "marked for deletion", which is the race described above; 1072 is a duplicate
+    name, which means the delete did not take. Both mean the service is not ours to
+    configure, so stop here rather than configuring somebody else's service. }
+  if ResultCode = 1073 then
+  begin
+    AddProblem('Windows still had the previous ESI Remote PC service marked for ' +
+      'deletion, so the new one could not be created. Reboot, then run this installer again.');
+    Exit;
+  end;
+
+  if ResultCode = 1072 then
+  begin
+    AddProblem('The ESI Remote PC service name was already taken by something ' +
+      'else. Nothing has been changed; remove that service and run this installer again.');
+    Exit;
+  end;
+
+  if ResultCode <> 0 then
+  begin
+    AddProblem('the ESI Remote PC service could not be created (sc.exe returned ' +
+      IntToStr(ResultCode) + '). Windows will not have recorded why, so this needs ' +
+      'looking at by hand in an elevated console.');
+    Exit;
+  end;
+
+  { The steps below are refinements. A failure in any of them leaves a working service, so
+    they are logged rather than treated as fatal. }
+  Exec(ExpandConstant('{sys}\sc.exe'), 'description ' + Q + 'ESIRemotePcAgent' + Q + ' ' + Q +
+       'LAN remote control agent. HTTPS API, telemetry, and power control.' + Q,
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { Failure recovery. Without it a crash of the HTTPS listener leaves the machine
+    unreachable until somebody walks over to it. Three escalating delays: a transient port
+    conflict deserves a fast retry, a persistent failure deserves not to spin. }
+  Exec(ExpandConstant('{sys}\sc.exe'),
+       'failure ESIRemotePcAgent reset= 86400 actions= restart/5000/restart/15000/restart/60000',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { requiredPrivileges. Undocumented but load-bearing: without it the account's
+    SeTcbPrivilege is present but disabled, and the first CreateProcessAsUser into the
+    console session fails, so the session agent can only be started by the logon task. }
+  Exec(ExpandConstant('{sys}\reg.exe'),
+       'add ' + Q + 'HKLM\SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent' + Q +
+       ' /v requiredPrivileges /t REG_SZ /d ' + Q +
+       'SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege' + Q + ' /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { ---- The per-user session helper ----
+    A logon-triggered scheduled task rather than a second Windows service. The helper has to
+    run inside each interactive session: SendInput is bound to the caller's session and is
+    subject to UIPI, and BitBlt has no desktop to read from anywhere else. A per-user service
+    (sc create with an empty obj=) is the other way to express that, but the empty obj= is
+    easily rejected outright by the SCM, and the rejection is silent from the user's point of
+    view - the agent appears to install fine and remote control then never becomes
+    available. A logon task is the documented mechanism for exactly this, needs no stored
+    credentials, and starts once per interactive user. }
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+       '/create /f /sc ONLOGON /tn ' + Q + 'ESI Remote PC Session Agent' + Q + ' /tr ' + Q +
+       Q + ExpandConstant('{app}\ESI.RemotePc.Session.exe') + Q + Q + ' /rl LIMITED /it',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { Start it now rather than waiting for the next logon.
+    <para>
+    An ONLOGON trigger fires when somebody signs in. Installing while somebody is already
+    signed in - which is the normal case, and always the case on the machine that ran the
+    installer - means the trigger has already been and gone, so the helper never starts: no
+    tray icon, and no desktop approval prompt, so pairing cannot be completed either. From
+    the user's side the install looks like it did nothing at all.
+    </para>
+    <para>
+    /it on the task means it only runs for an interactive user, so a headless install
+    correctly gets nothing here and everything on the next sign-in.
+    </para> }
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+       '/run /tn ' + Q + 'ESI Remote PC Session Agent' + Q,
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { ---- Start the agent ---- }
+  ResultCode := ScExitCode('start ESIRemotePcAgent');
+  if ResultCode <> 0 then
+    Log('WARNING: sc start returned ' + IntToStr(ResultCode) + '.');
+
+  WaitForAgentServing;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
   Missing: String;
 begin
+  if CurStep = ssInstall then
+    InstallProblems := '';
+
   if CurStep = ssPostInstall then
   begin
-    { Verify the two registrations actually landed. sc.exe reports a syntax problem as text
-      on stderr and still exits with an error the installer would otherwise ignore, so the
-      failure mode is a successful install with nothing registered. Saying so here is the
-      difference between a user who knows to re-run as administrator and a user who thinks
-      the product is broken. }
+    { Register the service and the logon task, replacing whatever was there, and start the
+      agent. This has to happen here rather than in [Run] because each step waits for the
+      SCM to catch up before the next one runs. }
+    RegisterEverything;
+
+    { Verify the two registrations actually landed, and that the agent is running rather
+      than merely registered. sc.exe reports a syntax problem as text on stderr and still
+      exits with an error the installer would otherwise ignore, so the failure mode is a
+      successful install with nothing registered. Saying so here is the difference between a
+      user who knows what to do next and a user who thinks the product is broken. }
     Missing := '';
     if not ServiceIsRegistered('ESIRemotePcAgent') then
       Missing := Missing + 'ESIRemotePcAgent' + #13#10;
@@ -195,7 +404,34 @@ begin
     end
     else
     begin
-      Log('Verified: both services are registered with the Service Control Manager.');
+      Log('Verified: the agent service and the logon task are both registered.');
+    end;
+
+    { Anything the waits above noticed. Said out loud, because a silent install that leaves
+      a stopped service is the failure this whole section exists to prevent. }
+    if Trim(InstallProblems) <> '' then
+    begin
+      Log('WARNING: ' + InstallProblems);
+
+      if not WizardSilent then
+      begin
+        MsgBox('ESI Remote PC installed, but something did not finish:' + #13#10 + #13#10 +
+          InstallProblems + #13#10 + #13#10 +
+          'The details are in the setup log. Re-running the installer usually clears this.',
+          mbError, MB_OK);
+      end;
+    end
+    else if not WizardSilent then
+    begin
+      { The one thing a new user needs, and the product has no window to show them.
+        Note the line breaks: a line starting with #13 is read as an ISPP directive, which
+        is a baffling way to lose five minutes. }
+      MsgBox('ESI Remote PC is installed and running.' + #13#10 + #13#10 +
+        'To pair a phone, open this page on the PC:' + #13#10 +
+        'https://localhost:' + IntToStr(HttpsPortNumber) + '/pairing' + #13#10 + #13#10 +
+        'There is no window to open. The agent runs as a Windows service; its tray icon ' +
+        'and the pairing approval prompt only exist while somebody is signed in to the PC.',
+        mbInformation, MB_OK);
     end;
 
     if WizardIsTaskSelected('addfirewall') then

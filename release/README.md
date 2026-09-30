@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  8EA397AB80BD5FECA9D7FE7E5D84BAB7
+ESI-RemotePC-Setup-1.0.0-x64.exe  962D712F6B97A261BC37D99DA3F97B95
 ESI-RemotePC-1.0.0.apk             02253FA591E2EC1037B83FADCDC824E9
 ```
 
@@ -97,11 +97,30 @@ passing:
 | **Dart opens an envelope C# produced** | AES-GCM, HKDF and the key generation, across a real key |
 | **A request signed by Dart is accepted by the agent** | and a replayed nonce is refused with `esi_replay` |
 
-**Not verified.** The 43.8 MB installer has not been run start to finish. It compiles, its
-file list is the exact directory the smoke test and the live check both execute from, and
-nothing about its registration steps changed — but the final copy-and-register run was not
-performed, because the UAC prompt was declined in the environment this was built in. The
-previous, 129.7 MB installer *was* run start to finish, including the uninstall.
+**Not verified by me.** I could not run this installer start to finish — the UAC prompt was
+declined in the environment it was built in. It has been run by a person, and what that
+surfaced is now fixed. Three real defects, all of which made "installed but nothing happens":
+
+- **`stop` / `delete` / `create` with no waits between them.** `sc stop` is asynchronous, and
+  `sc delete` on a service that is still running only *marks* the key for deletion. So
+  `create` failed with 1073, silently, because nothing was checking it; `start` then failed
+  with 87, because a delete-pending service cannot be started. The outcome was an install
+  that reported success, a service visible in `services.msc`, and an agent that never ran.
+  The sequence now waits for the SCM at each step and checks every exit code.
+- **The logon task never fired.** An `ONLOGON` trigger fires when somebody *signs in*, and
+  installing while already signed in — the normal case — means it has already been and gone.
+  So there was no tray icon and no approval prompt, and pairing could not be completed
+  either. The installer now starts the task as well as registering it.
+- **The post-install check only asked whether the service *existed*.** It now also connects
+  to the agent's port, because a service can be registered and permanently stopped, and that
+  is indistinguishable from a working install if all you check is registration.
+
+**The other half of "the program does not open" is by design, and is now said out loud.**
+This product has no window. The agent is a Windows service; the tray icon and the pairing
+approval prompt exist only while somebody is signed in to the PC. The installer now ends with
+a message saying so and giving the pairing page address, because installing a service and
+then looking for a window to click is a reasonable thing to expect and this product cannot
+meet it.
 
 **The app has never been on a phone.** It has been driven against a real agent from the
 harness, and the emulator install and launch were checked, but no human has held it.
