@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  962D712F6B97A261BC37D99DA3F97B95
+ESI-RemotePC-Setup-1.0.0-x64.exe  BF480D908606BBFC710846D3D15FFE7D
 ESI-RemotePC-1.0.0.apk             02253FA591E2EC1037B83FADCDC824E9
 ```
 
@@ -97,9 +97,15 @@ passing:
 | **Dart opens an envelope C# produced** | AES-GCM, HKDF and the key generation, across a real key |
 | **A request signed by Dart is accepted by the agent** | and a replayed nonce is refused with `esi_replay` |
 
-**Not verified by me.** I could not run this installer start to finish — the UAC prompt was
-declined in the environment it was built in. It has been run by a person, and what that
-surfaced is now fixed. Three real defects, all of which made "installed but nothing happens":
+**The installer is now tested by running it.** `installer/install-cycle-test.ps1` drives the
+real thing through five states — clean, install, **install again over its own output**,
+uninstall, install again — and asserts 26 things, all passing. It asks the question a user
+would ask ("is it working?") by connecting to the agent's port, not by reading the SCM's
+opinion, because a service can be registered and permanently stopped and that is
+indistinguishable from a working install if all you check is registration.
+
+Running it found five defects that every other check in the repository was blind to, and
+every one of them produced "installed, and nothing happens":
 
 - **`stop` / `delete` / `create` with no waits between them.** `sc stop` is asynchronous, and
   `sc delete` on a service that is still running only *marks* the key for deletion. So
@@ -107,13 +113,21 @@ surfaced is now fixed. Three real defects, all of which made "installed but noth
   with 87, because a delete-pending service cannot be started. The outcome was an install
   that reported success, a service visible in `services.msc`, and an agent that never ran.
   The sequence now waits for the SCM at each step and checks every exit code.
-- **The logon task never fired.** An `ONLOGON` trigger fires when somebody *signs in*, and
-  installing while already signed in — the normal case — means it has already been and gone.
-  So there was no tray icon and no approval prompt, and pairing could not be completed
-  either. The installer now starts the task as well as registering it.
-- **The post-install check only asked whether the service *existed*.** It now also connects
-  to the agent's port, because a service can be registered and permanently stopped, and that
-  is indistinguishable from a working install if all you check is registration.
+- **The logon task could never fire.** Two separate faults. An `ONLOGON` trigger fires when
+  somebody *signs in*, and installing while already signed in — the normal case — means it
+  has already been and gone, so the installer now starts the task too. And
+  `schtasks /create /tr "C:\Program Files\…"` cannot be made to work at all: Task Scheduler
+  parses the action out of the raw command line instead of taking an argv element, so it
+  stored the quoted path perfectly and then reported 0x80070002, "file not found", every time
+  it tried to run it. The task is now registered from an XML document, where the command is
+  element content and a space is just a character.
+- **Reinstalling over a working install failed with exit code 5**, because the running agent
+  and the running helper hold the very files being overwritten.
+- **Uninstalling left the entire 139 MB application directory behind**, for the same reason:
+  the uninstaller's own `sc stop` lives in `[UninstallRun]`, which runs *after* the files are
+  removed. Both are now stopped before anything is written or deleted.
+- **The post-install check only asked whether the service *existed*.** It now also connects to
+  the agent's port.
 
 **The other half of "the program does not open" is by design, and is now said out loud.**
 This product has no window. The agent is a Windows service; the tray icon and the pairing

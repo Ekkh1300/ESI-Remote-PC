@@ -19,7 +19,16 @@ param(
     [string] $Configuration = 'Release',
 
     [switch] $SkipTests,
-    [switch] $SkipPublish
+    [switch] $SkipPublish,
+
+    # Runs the installer itself, through install, reinstall, uninstall and reinstall-again.
+    # Needs administrator rights, so it is opt-in rather than part of the default build: a
+    # build that silently requires elevation is a build people stop running.
+    #
+    # It is the only check in the repository that exercises the installer, and every one of
+    # the defects it has found was invisible everywhere else - a service registered but
+    # unstartable, a logon task that never fired, an uninstall that left 139 MB behind.
+    [switch] $WithInstallCycle
 )
 
 $ErrorActionPreference = 'Stop'
@@ -167,4 +176,15 @@ if (-not $SkipPublish) {
     Write-Host "  publish directory: $publishDir"
     Write-Host '  To build the installer:  iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss'
     Write-Host ''
+}
+
+if ($WithInstallCycle) {
+    Invoke-Step 'installer cycle (install, reinstall, uninstall, reinstall)' {
+        $setup = Join-Path $artifacts 'ESI-RemotePC-Setup-1.0.0-x64.exe'
+        if (-not (Test-Path $setup)) {
+            throw "Build the installer first - iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss. Looking for $setup"
+        }
+
+        & (Join-Path $root 'installer\install-cycle-test.ps1') -Setup $setup
+    }
 }

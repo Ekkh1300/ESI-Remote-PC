@@ -112,6 +112,12 @@ Filename: "{sys}\sc.exe"; Parameters: "delete ESIRemotePcAgent"; Flags: runhidde
 ; audit. There is no 'keep my data' option; reinstalling simply means pairing again.
 Type: filesandordirs; Name: "{commonappdata}\ESI-RemotePC"
 
+  ; The install directory itself. Every file in it is removed by the [Files] entries, but the
+  ; empty folder survives, because Inno only removes an application directory it created
+  ; through [Dirs] and this one is populated wholesale from a publish output. An empty
+  ; "ESI Remote PC" left in Program Files after an uninstall reads as a failed removal.
+  Type: filesandordirs; Name: "{app}"
+
 [Code]
 { The firewall rules are added here rather than in [Run] because they are conditional on a
   task the user chose, and this is the only place that can ask. }
@@ -260,6 +266,117 @@ begin
   end;
 end;
 
+{ Stops the agent service, and waits until it has actually gone.
+  <para>
+  This is needed on both the install and the uninstall path, and on the uninstall path it is
+  the difference between a clean removal and a directory left behind.
+  </para>
+  <para>
+  The uninstaller's [UninstallRun] entries - which include `sc stop` - run *after* the files
+  have been removed. By then the running service is holding several hundred DLLs open out of
+  the very directory being deleted, and the removal silently leaves all of them. The
+  uninstaller was reporting success and leaving a complete 139 MB application directory on
+  disk.
+  </para>
+  <para>
+  Waiting is done by asking the agent's own port rather than by parsing `sc query`, because
+  Inno's Pascal Script here offers no way to read a command's output. The port answering is
+  the more meaningful signal anyway: it is the question a user is actually asking.
+  </para> }
+procedure StopAgentService;
+var
+  AttemptsLeft: Integer;
+begin
+  if not ServiceIsRegistered('ESIRemotePcAgent') then
+    Exit;
+
+  ScExitCode('stop ESIRemotePcAgent');
+
+  AttemptsLeft := 60;
+  while AgentIsServing and (AttemptsLeft > 0) do
+  begin
+    Sleep(500);
+    AttemptsLeft := AttemptsLeft - 1;
+  end;
+
+  if AgentIsServing then
+    Log('WARNING: the agent was still answering on its port 30 s after being stopped.');
+end;
+
+{ Stops the session helper, so its executable and DLLs are not locked.
+  <para>
+  This exists because of a real failure. Installing over a working install failed with exit
+  code 5 and left the agent stopped: the helper is running as the signed-in user, it holds
+  ESI.RemotePc.Session.exe and its DLLs open, and the installer cannot replace a file that is
+  in use. The same lock then stopped the uninstaller from removing the directory.
+  </para>
+  <para>
+  Two steps, in this order, and the second is unconditional on purpose. `schtasks /end` asks
+  Task Scheduler to stop the instances it started, which is the tidy way, but it is
+  asynchronous and it knows nothing about a helper that was started by something else. The
+  kill catches both, and it is blunt on purpose: this is a per-user tray helper that is
+  about to be replaced by a newer copy, and the worst a force-kill can cost is a tray icon
+  that reappears when the new one registers its task.
+  </para> }
+procedure StopSessionAgent;
+var
+  ResultCode: Integer;
+  Q: Char;
+  AttemptsLeft: Integer;
+begin
+  Q := '"';
+
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+       '/end /tn ' + Q + 'ESI Remote PC Session Agent' + Q,
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { A moment for the tidy path to take effect, since /end is asynchronous. Two seconds is
+    generous; the kill below is what actually guarantees the files are free. }
+  Sleep(2000);
+
+  Exec(ExpandConstant('{cmd}'), '/c taskkill /f /im ESI.RemotePc.Session.exe',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { taskkill is asynchronous too, so give the handles a moment to be released before the
+    installer starts overwriting the files. }
+  AttemptsLeft := 20;
+  while AttemptsLeft > 0 do
+  begin
+    Sleep(250);
+    AttemptsLeft := AttemptsLeft - 1;
+  end;
+end;
+
+{ Registers the session agent's logon task, and starts it.
+  <para>
+  This is a call out to `esirc task register` rather than a schtasks command line, and the
+  reason is not tidiness. `schtasks /create /tr "C:\Program Files\...\something.exe"` cannot
+  be made to work: Task Scheduler parses the action out of the raw command line itself rather
+  than taking it as an argv element, so it stores the quoted path perfectly and then fails to
+  run it with 0x80070002, "file not found". The workarounds that are supposed to cover that -
+  a second pair of quotes, or routing the launch through `cmd /c` - are rejected by the same
+  parser with "Invalid argument/option - 'Files\ESI'".
+  </para>
+  <para>
+  Passing the task as an XML document sidesteps it: the command is element content, where a
+  space is just a character. The document has to be written in the encoding it declares, and
+  Inno's Pascal Script has one string-to-file routine and no way to say which encoding that
+  is - so the writing is done in C#, where it is unambiguous and testable.
+  </para> }
+procedure RegisterSessionAgentTask;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{app}\ESI.RemotePc.Agent.Cli.exe'), 'task register',
+       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if ResultCode <> 0 then
+    AddProblem('the session helper''s logon task could not be registered, so there will be ' +
+      'no tray icon and no approval prompt. Without the prompt, pairing cannot be completed ' +
+      'and remote control cannot work. "esirc task register" returned ' +
+      IntToStr(ResultCode) + '.');
+end;
+
 { Registers the agent service and the session agent's logon task, replacing whatever was
   there before, and starts the agent. Each step's exit code is checked, because a silent
   failure here is what makes an install report success and leave nothing working. }
@@ -343,26 +460,7 @@ begin
     view - the agent appears to install fine and remote control then never becomes
     available. A logon task is the documented mechanism for exactly this, needs no stored
     credentials, and starts once per interactive user. }
-  Exec(ExpandConstant('{sys}\schtasks.exe'),
-       '/create /f /sc ONLOGON /tn ' + Q + 'ESI Remote PC Session Agent' + Q + ' /tr ' + Q +
-       Q + ExpandConstant('{app}\ESI.RemotePc.Session.exe') + Q + Q + ' /rl LIMITED /it',
-       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-  { Start it now rather than waiting for the next logon.
-    <para>
-    An ONLOGON trigger fires when somebody signs in. Installing while somebody is already
-    signed in - which is the normal case, and always the case on the machine that ran the
-    installer - means the trigger has already been and gone, so the helper never starts: no
-    tray icon, and no desktop approval prompt, so pairing cannot be completed either. From
-    the user's side the install looks like it did nothing at all.
-    </para>
-    <para>
-    /it on the task means it only runs for an interactive user, so a headless install
-    correctly gets nothing here and everything on the next sign-in.
-    </para> }
-  Exec(ExpandConstant('{sys}\schtasks.exe'),
-       '/run /tn ' + Q + 'ESI Remote PC Session Agent' + Q,
-       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  RegisterSessionAgentTask;
 
   { ---- Start the agent ---- }
   ResultCode := ScExitCode('start ESIRemotePcAgent');
@@ -378,7 +476,16 @@ var
   Missing: String;
 begin
   if CurStep = ssInstall then
+  begin
     InstallProblems := '';
+
+    { ssInstall is the step just before files are copied, which is the last moment anything
+      can still be stopped without its files being locked. Both of these are running
+      processes that hold the files about to be written; see StopAgentService and
+      StopSessionAgent for what goes wrong if they are not. }
+    StopAgentService;
+    StopSessionAgent;
+  end;
 
   if CurStep = ssPostInstall then
   begin
@@ -459,6 +566,13 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    { Before the files are removed, not in [UninstallRun] which runs afterwards: a running
+      agent and a running helper hold the very files being deleted, and the directory is
+      then left behind - a complete application tree, on a machine where the user has
+      uninstalled the product. }
+    StopAgentService;
+    StopSessionAgent;
+
     Exec(ExpandConstant('{sys}\netsh.exe'),
       'advfirewall firewall delete rule name="ESI Remote PC (LAN)"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec(ExpandConstant('{sys}\netsh.exe'),

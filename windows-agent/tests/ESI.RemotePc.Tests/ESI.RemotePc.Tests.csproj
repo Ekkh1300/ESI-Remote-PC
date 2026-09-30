@@ -36,6 +36,10 @@
       against a parallel test host.
     -->
     <ProjectReference Include="..\..\src\ESI.RemotePc.Agent.Service\ESI.RemotePc.Agent.Service.csproj" />
+    <!-- For the CLI's task definition and its option parsing, which are installer-critical
+         and not otherwise covered by anything. The CLI already exposes its internals to this
+         assembly. -->
+    <ProjectReference Include="..\..\src\ESI.RemotePc.Agent.Cli\ESI.RemotePc.Agent.Cli.csproj" />
   </ItemGroup>
 
 </Project>

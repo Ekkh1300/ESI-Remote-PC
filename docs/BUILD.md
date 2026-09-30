@@ -292,22 +292,37 @@ $ProgressPreference = 'SilentlyContinue'
 curl.exe -k https://localhost:48220/api/v1/handshake
 ```
 
-**6. The installer round-trips.** On a throwaway VM: install, `esirc status`, open
+**6. The installer round-trips.** This one is automated.
+`installer\install-cycle-test.ps1` runs the real installer through five states — clean,
+install, **install again over its own output**, uninstall, install again — and asserts 26
+things about the result, asking the question a user would ask ("is it working?") by
+connecting to the agent's port rather than by reading the SCM's opinion. It needs
+administrator rights, so it is opt-in:
+
+```powershell
+iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss
+powershell -File windows-agent\build.ps1 -SkipTests -SkipPublish -WithInstallCycle
+```
+
+It exists because the installer is the only artefact that no automated check ever ran, and
+because every defect it has found was invisible everywhere else: a service that was
+registered but could not be started, a logon task that could never fire, an upgrade that
+failed on locked files, and an uninstall that reported success while leaving 139 MB behind.
+All four look identical to a user — installed, and nothing happens.
+
+By hand, on a throwaway VM: install, `esirc status`, open
 `https://localhost:48220/pairing`, confirm the device id on the page matches the console
 output of `esirc status`, then uninstall and confirm `{commonappdata}\ESI-RemotePC` is gone
-and both services are removed:
+and the service and logon task are both removed:
 
 ```powershell
 sc.exe query ESIRemotePcAgent
-sc.exe query ESIRemotePcSession
-```
-
-Both should return `ERROR_SERVICE_DOES_NOT_EXIST` (1060), and the scheduled task should be
-gone:
-
-```powershell
 schtasks.exe /query /tn "ESI Remote PC Session Agent"
 ```
+
+`sc.exe query ESIRemotePcAgent` should return `ERROR_SERVICE_DOES_NOT_EXIST` (1060), the
+`schtasks` query should report that it cannot find the file, and
+`{autopf}\ESI Remote PC` should be gone entirely rather than left as an empty folder.
 
 **7. The app and the agent actually talk to each other.** This is the check that is not a
 unit test and not a smoke probe, and every serious defect in the pairing path was found by

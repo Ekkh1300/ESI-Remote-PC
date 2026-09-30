@@ -33,6 +33,9 @@ internal static class Program
             "uninstall" => WithElevation(rest, static a => Uninstall(a)),
             "status" => ServiceManager.Status(),
             "pair" => Pair(rest),
+            // Elevated because a logon task is machine state: without it the installer would
+            // register a task nobody can see, or none at all.
+            "task" => WithElevation(rest, static a => TaskCommands.Register(a)),
             "version" => PrintVersion(),
 
             _ => Unknown(command),
@@ -318,12 +321,13 @@ internal static class Program
               uninstall    Remove the Windows services (--purge also deletes the data)
               status       Show what is installed and whether it is running
               pair         List, approve, deny and revoke devices
+              task         Register the session helper's logon task
               version      Print the version
 
             Run 'esirc <command> --help' for the options of a specific command.
 
-            install and uninstall need administrator rights; the tool asks for them through
-            UAC by itself.
+            install, uninstall and task need administrator rights; the tool asks for them
+            through UAC by itself.
             """);
     }
 }
