@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  BF480D908606BBFC710846D3D15FFE7D
+ESI-RemotePC-Setup-1.0.0-x64.exe  59A785B6CC4ADAB1B4AD568FC212FC2A
 ESI-RemotePC-1.0.0.apk             02253FA591E2EC1037B83FADCDC824E9
 ```
 
