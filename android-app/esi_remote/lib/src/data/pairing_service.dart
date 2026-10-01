@@ -98,10 +98,14 @@ class PairingService {
   ///
   /// [onProgress] is called on every state change so the UI can narrate; the returned
   /// future completes when the attempt reaches a terminal state.
+  ///
+  /// [provisioningSecret] is read on every poll rather than captured, because the secret
+  /// does not exist when the attempt starts: the PC mints it and hands it out on a QR shown
+  /// after the request. A phone that polls before scanning simply gets no credentials yet.
   Future<PairingProgress> pair({
     required EsiEndpoint endpoint,
     required String deviceName,
-    required Uint8List provisioningSecret,
+    required Uint8List Function() provisioningSecret,
     String? osVersion,
     String? appVersion,
     required void Function(PairingProgress) onProgress,
@@ -109,6 +113,38 @@ class PairingService {
     void Function()? onTick,
   }) async {
     final api = _unpairedClient(endpoint);
+    // The client has to outlive the request. It used to be closed in a `finally` wrapped
+    // around the request alone, which left every poll after that running against a closed
+    // client: each one failed with "Client is already closed", so the credentials could
+    // never be collected no matter how correct the secret was.
+    try {
+      return await _run(
+        api: api,
+        endpoint: endpoint,
+        deviceName: deviceName,
+        provisioningSecret: provisioningSecret,
+        osVersion: osVersion,
+        appVersion: appVersion,
+        onProgress: onProgress,
+        confirm: confirm,
+        onTick: onTick,
+      );
+    } finally {
+      api.close();
+    }
+  }
+
+  Future<PairingProgress> _run({
+    required EsiApi api,
+    required EsiEndpoint endpoint,
+    required String deviceName,
+    required Uint8List Function() provisioningSecret,
+    String? osVersion,
+    String? appVersion,
+    required void Function(PairingProgress) onProgress,
+    Future<bool> Function()? confirm,
+    void Function()? onTick,
+  }) async {
     PairRequestResult created;
 
     try {
@@ -126,8 +162,6 @@ class PairingService {
       final progress = _failure('The pairing request could not be sent: $e');
       onProgress(progress);
       return progress;
-    } finally {
-      api.close();
     }
 
     var progress = PairingProgress(
@@ -173,7 +207,7 @@ class PairingService {
 
       final PairStatus status;
       try {
-        status = await _poll(api, created.pairingId, provisioningSecret);
+        status = await _poll(api, created.pairingId, provisioningSecret());
       } on EsiApiException catch (e) {
         // A single failed poll is not fatal: the phone may have moved between access
         // points. Keep trying until the window closes, but remember the last reason.
@@ -259,6 +293,27 @@ class PairingService {
         return consumed;
       }
 
+      // Once the PC approves, a poll carrying no secret comes back "error", because §5.4
+      // releases nothing to a phone that has not presented the one. That is not a failure:
+      // the agent does not consume the attempt when the secret is missing, so this is the
+      // cue to go and scan the QR, not a reason to give up. It only becomes fatal once the
+      // phone has a secret and still gets nothing.
+      if (status.status == 'error' && provisioningSecret().isEmpty) {
+        final awaitingSecret = PairingProgress(
+          phase: PairingPhase.awaitingApproval,
+          pairingId: created.pairingId,
+          userCode: created.userCode,
+          expiresAt: created.expiresAt,
+          approvalMethod: created.approval,
+          deviceName: deviceName,
+          message: 'Approved on the PC, which is now holding the credentials until this '
+              'phone shows it the one-time secret. Scan the QR on the PC, or paste it, to '
+              'collect them.',
+        );
+        onProgress(awaitingSecret);
+        continue;
+      }
+
       if (!status.isApproved) {
         final failed = PairingProgress(
           phase: PairingPhase.failed,
@@ -297,7 +352,7 @@ class PairingService {
       try {
         final opened = await EsiCrypto.openPairingEnvelope(
           envelope: WrappedSecretEnvelope.fromJson(envelopeJson.json),
-          provisioningSecret: provisioningSecret,
+          provisioningSecret: provisioningSecret(),
           pairingId: created.pairingId,
           deviceId: deviceId,
         );
@@ -353,14 +408,20 @@ class PairingService {
     String pairingId,
     Uint8List provisioningSecret,
   ) async {
+    // The parameter is omitted while the phone has not scanned the QR yet. An empty
+    // `secret=` would be rejected outright as not decoding to 32 bytes, whereas leaving it
+    // out is explicitly supported: the agent answers with the status and withholds the
+    // credentials, and does not consume the attempt.
+    final query = <(String, String)>[('id', pairingId)];
+    if (provisioningSecret.isNotEmpty) {
+      // §5.4: without this the agent approves but never releases the secrets.
+      query.add(('secret', EsiCrypto.base64(provisioningSecret)));
+    }
+
     final json = await api.getJson(
       '/pair/session',
       signed: false,
-      query: <(String, String)>[
-        ('id', pairingId),
-        // §5.4: without this the agent approves but never releases the secrets.
-        ('secret', EsiCrypto.base64(provisioningSecret)),
-      ],
+      query: query,
     );
     return PairStatus.fromJson(json);
   }

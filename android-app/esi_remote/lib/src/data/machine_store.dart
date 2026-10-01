@@ -177,18 +177,44 @@ class MachineStore {
   Future<List<PairedMachine>> loadAll() async {
     final raw = await _storage.read(key: _indexKey);
     if (raw == null || raw.isEmpty) return <PairedMachine>[];
+    List<Object?> entries;
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! List) return <PairedMachine>[];
-      return decoded
-          .whereType<Object>()
-          .map((e) => PairedMachine.fromJson(
-                e is Map ? e.cast<String, dynamic>() : <String, dynamic>{},
-              ))
-          .where((m) => m.host.isNotEmpty)
-          .toList();
+      entries = decoded;
     } on FormatException {
       return <PairedMachine>[];
+    }
+
+    final machines = <PairedMachine>[];
+    for (final entry in entries.whereType<Object>()) {
+      if (entry is! Map) continue;
+
+      // The index is only a pointer list: it deliberately holds no master secret, because
+      // that secret is this phone's whole identity to the agent. The record it points at is
+      // the one that carries it, so the record is what has to be read back. Loading from the
+      // index alone returned every machine without its secret, which reads as "Pairing did
+      // not finish" on every screen, forever, however successfully the handshake completed.
+      final id = entry['deviceId'] is String ? entry['deviceId']! as String : '';
+      final host = entry['host'] is String ? entry['host']! as String : '';
+      final record = await _storage.read(key: '$_keyPrefix${id.isEmpty ? host : id}');
+
+      PairedMachine machine;
+      final decoded = record == null || record.isEmpty ? null : _decodeMap(record);
+      machine = decoded == null
+          ? PairedMachine.fromJson(entry.cast<String, dynamic>())
+          : PairedMachine.fromJson(decoded);
+      if (machine.host.isNotEmpty) machines.add(machine);
+    }
+    return machines;
+  }
+
+  static Map<String, dynamic>? _decodeMap(String value) {
+    try {
+      final decoded = jsonDecode(value);
+      return decoded is Map ? decoded.cast<String, dynamic>() : null;
+    } on FormatException {
+      return null;
     }
   }
 

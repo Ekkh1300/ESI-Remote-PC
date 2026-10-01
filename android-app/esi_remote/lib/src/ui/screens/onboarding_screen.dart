@@ -11,7 +11,6 @@ import '../../data/pairing_service.dart';
 import '../../net/esi_api.dart';
 import '../../net/discovery.dart';
 import '../../net/wol.dart';
-import '../../protocol/esi_crypto.dart';
 import '../../protocol/models.dart';
 import '../../protocol/pairing_qr.dart';
 import '../../protocol/protocol_constants.dart';
@@ -28,8 +27,8 @@ import '../widgets/states.dart';
 ///
 /// Three routes in, because three things actually happen in the real world: the PC is on
 /// the same network and answers a search, the user knows its address, or the PC is showing
-/// a QR code on its screen. Each one ends in the same place — a confirmed endpoint with a
-/// pin — and only then can pairing start.
+/// a QR code on its screen. Each one ends in the same place â€” a confirmed endpoint with a
+/// pin â€” and only then can pairing start.
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -42,7 +41,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final TextEditingController _port =
       TextEditingController(text: '${EsiProtocol.defaultHttpsPort}');
   final TextEditingController _pin = TextEditingController();
-  final TextEditingController _secret = TextEditingController();
   final TextEditingController _mac = TextEditingController();
 
   String? _note;
@@ -63,7 +61,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     _host.dispose();
     _port.dispose();
     _pin.dispose();
-    _secret.dispose();
     _mac.dispose();
     super.dispose();
   }
@@ -75,21 +72,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         : EsiProtocol.defaultHttpsPort;
   }
 
-  bool get _canPair =>
-      _host.text.trim().isNotEmpty &&
-      _pin.text.trim().isNotEmpty &&
-      _decodeSecret(_secret.text) != null;
-
-  static List<int>? _decodeSecret(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return null;
-    try {
-      final bytes = EsiCrypto.fromBase64Url(trimmed);
-      return bytes.length == EsiProtocol.secretLength ? bytes : null;
-    } on FormatException {
-      return null;
-    }
-  }
+  /// Whether the Pair button may run.
+  ///
+  /// The pairing secret is not asked for here, and cannot be: the PC mints it while
+  /// handling the request this button starts and hands it out on a QR shown after that.
+  /// Requiring it up front is what made pairing impossible to begin from the phone.
+  bool get _canPair => _host.text.trim().isNotEmpty && _pin.text.trim().isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -120,13 +108,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       _PairedMachines(machines: machines),
                       const SizedBox(height: EsiSpace.md),
                     ],
-                    const _DiscoveryPanel(),
+                    _DiscoveryPanel(onUse: _adopt),
                     const SizedBox(height: EsiSpace.md),
                     _ManualPanel(
                       host: _host,
                       port: _port,
                       pin: _pin,
-                      secret: _secret,
                       mac: _mac,
                       note: _note,
                       busy: _busy,
@@ -149,6 +136,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
+  /// Fills the manual form from a discovered agent. Everything except the pin, which
+  /// discovery is not allowed to supply â€” see _DiscoveryPanel.onUse.
+  void _adopt(String host, int port) {
+    setState(() {
+      _host.text = host;
+      _port.text = '$port';
+    });
+  }
+
   Future<void> _probe() async {
     setState(() => _busy = true);
     final handshake =
@@ -156,7 +152,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (handshake == null) return;
-    // Show what the PC claims, but never fill the pin field from it: PROTOCOL.md §2.1 says
+    // Show what the PC claims, but never fill the pin field from it: PROTOCOL.md Â§2.1 says
     // this value could have been written by anything on the wire.
     await showDialog<void>(
       context: context,
@@ -167,11 +163,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   Future<void> _pair() async {
     final host = _host.text.trim();
     final pin = _pin.text.trim();
-    final secret = _decodeSecret(_secret.text);
-    if (host.isEmpty || pin.isEmpty || secret == null) {
+    if (host.isEmpty || pin.isEmpty) {
       _warn(
-        'Pairing needs the address, the certificate pin and the pairing secret. The '
-        'secret only exists on the PC — on its pairing screen or in its QR code.',
+        'Pairing needs the address and the certificate pin. The pairing secret is not '
+        'something you find first â€” the PC creates it when it receives this request and '
+        'hands it to you on the QR shown while you wait.',
       );
       return;
     }
@@ -183,7 +179,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (!ok || !mounted) return;
     await _start(
       endpoint: EsiEndpoint(host: host, port: _portValue, pins: <String>[pin]),
-      secret: secret,
+      // Always empty. A secret is minted per attempt, so anything known before this one
+      // exists belongs to a different attempt - and the agent consumes that attempt before
+      // it tries to unwrap, so carrying a stale one would burn the code it just issued.
+      secret: const <int>[],
       mac: _mac.text.trim(),
       source: PairingSource.manual,
     );
@@ -226,16 +225,27 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }) async {
     setState(() => _busy = true);
     if (!mounted) return;
-    await context.pushNamed<void>(
-      '/pairing',
-      extra: PairingRequest(
-        endpoint: endpoint,
-        provisioningSecret: Uint8List.fromList(secret),
-        source: source,
-        macAddress: mac.isEmpty ? null : WakeOnLan.normaliseMac(mac),
-      ),
-    );
-    if (mounted) setState(() => _busy = false);
+    try {
+      // Pushed by path, not by name. `pushNamed` resolves through
+      // `RouteMatchList.namedLocation`, which walks the match list and dereferences each
+      // route's `name`; no route in this app declares one, so it threw a null-check error and
+      // left the phone sitting on the form. Pairing was unreachable.
+      await context.push<void>(
+        '/pairing',
+        extra: PairingRequest(
+          endpoint: endpoint,
+          provisioningSecret: Uint8List.fromList(secret),
+          source: source,
+          macAddress: mac.isEmpty ? null : WakeOnLan.normaliseMac(mac),
+        ),
+      );
+    } catch (error) {
+      // A thrown navigation used to strand the form with the Pair button greyed out and no
+      // explanation, because `_busy` was only cleared on the success path.
+      _warn('Could not open the pairing screen: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   /// Called by the scan and paste buttons once they have a raw code. Public because the
@@ -250,20 +260,31 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (payload.hasAddress) _host.text = payload.host;
     _port.text = '${payload.port}';
     if (payload.hasPin) _pin.text = payload.spkiPin;
-    if (payload.provisioningSecret.isNotEmpty) {
-      _secret.text = payload.provisioningSecret;
-    }
     if (payload.macAddress != null) _mac.text = payload.macAddress!;
+
+    // Only the address and the pin are taken from a QR scanned on this screen. The one-time
+    // secret is minted per attempt, so anything read before an attempt starts belongs to a
+    // different one - and the agent consumes that attempt before it tries to unwrap, so
+    // carrying a stale secret forward would burn the code it just issued. It is collected on
+    // the pairing screen instead, from the QR the PC shows while this attempt is waiting.
+    final missing = payload.missingFields
+        .where((field) => field != 'the pairing secret')
+        .toList(growable: false);
+
     setState(() {
-      _note = payload.missingFields.isEmpty
-          ? 'Read from the QR code. Check the address and pin against the PC, then pair.'
-          : 'The QR code did not include ${payload.missingFields.join(' or ')}. '
-              'Fill in the rest below.';
+      _note = missing.isNotEmpty
+          ? 'The QR code did not include ${missing.join(' or ')}. Fill in the rest below.'
+          : payload.hasSecret
+              ? 'Address, port and pin read from the QR code. Its pairing secret belongs to '
+                  'an attempt that is no longer running, so it is not used here â€” scan this '
+                  'QR again while you wait, on the next screen, to collect the credentials.'
+              : 'Read from the QR code. Check the address and pin against the PC, then '
+                  'pair. The one-time secret comes back from the PC while you wait.';
     });
     _warn(
-      payload.missingFields.isEmpty
-          ? 'Pairing details read from the QR code.'
-          : 'Read the QR code, but it was missing ${payload.missingFields.join(' and ')}.',
+      missing.isNotEmpty
+          ? 'Read the QR code, but it was missing ${missing.join(' and ')}.'
+          : 'Pairing details read from the QR code.',
     );
   }
 }
@@ -307,7 +328,15 @@ class _Masthead extends StatelessWidget {
 }
 
 class _DiscoveryPanel extends ConsumerWidget {
-  const _DiscoveryPanel();
+  const _DiscoveryPanel({required this.onUse});
+
+  /// Copies a discovered address into the manual form below.
+  ///
+  /// The pin is deliberately not part of this. PROTOCOL.md Â§2.1 says the value in a
+  /// discovery answer could have been written by anything on the wire, and the pin is the
+  /// one field whose whole job is to decide whether you are talking to the right PC. The
+  /// address is not a secret and is what the user would otherwise retype, so it is filled.
+  final void Function(String host, int port) onUse;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -339,7 +368,7 @@ class _DiscoveryPanel extends ConsumerWidget {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                   SizedBox(width: EsiSpace.md),
-                  Expanded(child: Text('Searching…', style: EsiType.body)),
+                  Expanded(child: Text('Searchingâ€¦', style: EsiType.body)),
                 ],
               ),
             )
@@ -353,7 +382,8 @@ class _DiscoveryPanel extends ConsumerWidget {
               ),
             )
           else
-            for (final agent in state.agents) _DiscoveredAgentRow(agent: agent),
+            for (final agent in state.agents)
+              _DiscoveredAgentRow(agent: agent, onUse: onUse),
           if (state.channelsSeen.isNotEmpty) ...<Widget>[
             const SizedBox(height: EsiSpace.md),
             Wrap(
@@ -395,9 +425,10 @@ class _DiscoveryPanel extends ConsumerWidget {
 }
 
 class _DiscoveredAgentRow extends ConsumerWidget {
-  const _DiscoveredAgentRow({required this.agent});
+  const _DiscoveredAgentRow({required this.agent, required this.onUse});
 
   final DiscoveredAgent agent;
+  final void Function(String host, int port) onUse;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -437,8 +468,8 @@ class _DiscoveredAgentRow extends ConsumerWidget {
               agent.host.isEmpty
                   ? 'Answered a broadcast, but its address could not be determined. Add '
                       'it by hand.'
-                  : 'agent ${agent.handshake.agentVersion} · '
-                      'protocol v${agent.handshake.protocolVersion} · '
+                  : 'agent ${agent.handshake.agentVersion} Â· '
+                      'protocol v${agent.handshake.protocolVersion} Â· '
                       '${agent.methods.length} method'
                       '${agent.methods.length == 1 ? '' : 's'}',
               style: EsiType.mono.copyWith(fontSize: 10.5),
@@ -469,14 +500,22 @@ class _DiscoveredAgentRow extends ConsumerWidget {
   Future<void> _use(BuildContext context, WidgetRef ref) async {
     await ref.read(discoveryProvider.notifier).probe(agent.host, agent.port);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
+
+    // Take the messenger before touching the parent: filling the form rebuilds the tree
+    // this row lives in, and the context would no longer be usable afterwards.
+    final messenger = ScaffoldMessenger.of(context);
+
+    onUse(agent.host, agent.port);
+
+    messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
           content: Text(
-            'Check the address above, then add the pairing secret from the PC\'s pairing '
-            'screen — or scan its QR code, which carries the pin '
-            '${formatBytesBase64(agent.spkiPin, head: 10, tail: 6)} for you.',
+            'Address filled in from discovery. The pin is not â€” PROTOCOL.md Â§2.1 treats a '
+            'value from the wire as untrusted, and it is the one field that decides whether '
+            'this really is your PC. Take it from the PC\'s pairing screen, or scan its QR '
+            'code, which carries it for you: ${formatBytesBase64(agent.spkiPin, head: 10, tail: 6)}.',
           ),
           duration: const Duration(seconds: 9),
         ),
@@ -489,7 +528,6 @@ class _ManualPanel extends StatelessWidget {
     required this.host,
     required this.port,
     required this.pin,
-    required this.secret,
     required this.mac,
     required this.note,
     required this.busy,
@@ -502,7 +540,6 @@ class _ManualPanel extends StatelessWidget {
   final TextEditingController host;
   final TextEditingController port;
   final TextEditingController pin;
-  final TextEditingController secret;
   final TextEditingController mac;
   final String? note;
   final bool busy;
@@ -565,24 +602,12 @@ class _ManualPanel extends StatelessWidget {
             ),
             const SizedBox(height: EsiSpace.md),
             TextField(
-              controller: secret,
-              onChanged: (_) => onChanged(),
-              autocorrect: false,
-              obscureText: true,
-              style: EsiType.mono.copyWith(color: EsiPalette.ink, fontSize: 12),
-              decoration: const InputDecoration(
-                labelText: 'Pairing secret',
-                hintText: 'The one-time secret shown with the pairing code',
-              ),
-            ),
-            const SizedBox(height: EsiSpace.md),
-            TextField(
               controller: mac,
               autocorrect: false,
               style: EsiType.mono.copyWith(color: EsiPalette.ink, fontSize: 12),
               decoration: const InputDecoration(
                 labelText: 'MAC address (optional)',
-                hintText: 'AA:BB:CC:DD:EE:FF — used to wake the PC',
+                hintText: 'AA:BB:CC:DD:EE:FF â€” used to wake the PC',
               ),
             ),
             const SizedBox(height: EsiSpace.lg),
@@ -632,8 +657,11 @@ class _QrPanelState extends ConsumerState<_QrPanel> {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(
-            'Someone has to approve this on the PC, and nothing else will do it. Sign in to '
-            'the PC and a prompt appears there - approve it there, then scan the QR it shows.\n\n'
+            'Pairing starts on this phone: press Pair and a six-digit code appears on the '
+            'PC, where someone has to approve it. Nothing else will do it. The QR on that '
+            'prompt carries the PC address, the certificate pin and a one-time secret - '
+            'these buttons read the address and pin into the form; the secret is collected '
+            'on the next screen, while the code is waiting.\n\n'
             'If nobody is signed in, there is no trusted display for the code, so it cannot '
             'be approved in a browser. Stop the agent, run "esirc pair approve <code>" in a '
             'console on the PC, and start the agent again.\n\n'
@@ -751,7 +779,7 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
                     padding: const EdgeInsets.all(EsiSpace.lg),
                     child: Text(
                       'The code is on the pairing page in the PC\'s browser. A phone camera '
-                      'cannot read a screen that is asleep — wake it first.',
+                      'cannot read a screen that is asleep â€” wake it first.',
                       textAlign: TextAlign.center,
                       style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
                     ),
@@ -882,8 +910,8 @@ class _PairedMachines extends ConsumerWidget {
                       children: <Widget>[
                         Text(machine.displayName, style: EsiType.subtitle.copyWith(fontSize: 14)),
                         Text(
-                          '${machine.displayAddress} · '
-                          '${machine.isPaired ? 'paired' : 'not paired'} · key ${machine.keyId}',
+                          '${machine.displayAddress} Â· '
+                          '${machine.isPaired ? 'paired' : 'not paired'} Â· key ${machine.keyId}',
                           style: EsiType.mono.copyWith(fontSize: 10.5),
                         ),
                       ],
@@ -990,7 +1018,9 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
   Widget build(BuildContext context) {
     final flow = ref.watch(pairingFlowProvider);
     final progress = flow.progress;
-    final request = _request;
+    // The flow's copy, not the one handed in by the router: adopting the secret from a
+    // scanned QR replaces it, and the waiting panel has to see the updated one.
+    final request = flow.request ?? _request;
 
     if (request == null) {
       return Scaffold(
@@ -1052,6 +1082,8 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
           progress: progress!,
           request: request,
           onCancel: () => _confirmCancel(context),
+          onScan: _scanSecret,
+          onPaste: _pasteSecret,
         );
       case PairingPhase.done:
         return _Done(
@@ -1063,7 +1095,7 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
       case PairingPhase.failed:
         return _Failed(progress: progress!, onRetry: () => context.go('/onboarding'));
       case null:
-        return const EsiLoading(label: 'Starting the handshake…');
+        return const EsiLoading(label: 'Starting the handshakeâ€¦');
     }
   }
 
@@ -1078,6 +1110,63 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
     );
     if (!ok) return;
     ref.read(pairingFlowProvider.notifier).cancel();
+  }
+
+  /// Scans the QR the PC shows while this attempt is running.
+  Future<void> _scanSecret() async {
+    final raw = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(builder: (_) => const QrScannerScreen()),
+    );
+    if (raw == null || !mounted) return;
+    _adoptSecret(raw);
+  }
+
+  Future<void> _pasteSecret() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final raw = data?.text?.trim();
+    if (!mounted) return;
+    if (raw == null || raw.isEmpty) {
+      _say('There is nothing on the clipboard to paste.');
+      return;
+    }
+    _adoptSecret(raw);
+  }
+
+  /// Takes the one-time secret off a scanned or pasted QR and hands it to the attempt that
+  /// is already running.
+  ///
+  /// This deliberately does *not* start a second attempt. The secret is minted per attempt,
+  /// so a fresh request would carry a different one and the unwrap would fail - and Â§5.4 has
+  /// the agent mark the attempt consumed before it tries, so a mismatch burns the code.
+  void _adoptSecret(String raw) {
+    final result = PairingQr.parse(raw);
+    if (!result.isSuccess) {
+      _say(result.error ?? 'That QR code could not be read.');
+      return;
+    }
+
+    final payload = result.payload!;
+    if (!payload.hasSecret) {
+      _say(
+        'That code carries no pairing secret, so the PC will release no credentials. '
+        'Scan the QR the PC shows while this screen is waiting.',
+      );
+      return;
+    }
+
+    ref
+        .read(pairingFlowProvider.notifier)
+        .adoptSecret(Uint8List.fromList(payload.provisioningSecretBytes));
+    _say('Pairing secret read. The PC releases the credentials once it approves.');
+  }
+
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 6)),
+      );
   }
 
   Future<void> _finishAndOpen() async {
@@ -1100,11 +1189,19 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
 }
 
 class _Waiting extends StatelessWidget {
-  const _Waiting({required this.progress, required this.request, required this.onCancel});
+  const _Waiting({
+    required this.progress,
+    required this.request,
+    required this.onCancel,
+    required this.onScan,
+    required this.onPaste,
+  });
 
   final PairingProgress progress;
   final PairingRequest request;
   final VoidCallback onCancel;
+  final VoidCallback onScan;
+  final VoidCallback onPaste;
 
   @override
   Widget build(BuildContext context) {
@@ -1127,7 +1224,7 @@ class _Waiting extends StatelessWidget {
               children: <Widget>[
                 if (progress.phase != PairingPhase.decrypting) ...<Widget>[
                   Text(
-                    code == null ? 'Asking the PC for a code…' : 'Match this code on the PC:',
+                    code == null ? 'Asking the PC for a codeâ€¦' : 'Match this code on the PC:',
                     style: EsiType.body.copyWith(color: EsiPalette.dim),
                     textAlign: TextAlign.center,
                   ),
@@ -1157,6 +1254,40 @@ class _Waiting extends StatelessWidget {
                     progress.message!,
                     textAlign: TextAlign.center,
                     style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
+                  ),
+                ],
+                // The PC mints the one-time secret while handling the request that started
+                // this attempt, so it could not have been supplied when the attempt began.
+                // The QR on the approval prompt - or on /pairing?code=â€¦ - is where it comes
+                // back, and until this phone holds it the PC approves but releases nothing.
+                if (!request.hasSecret && progress.phase != PairingPhase.decrypting) ...<Widget>[
+                  const SizedBox(height: EsiSpace.lg),
+                  Text(
+                    'The PC will approve this code, then keep the credentials until it sees '
+                    'the one-time secret from its own QR code. When the prompt on the PC '
+                    'shows a QR, scan it here.',
+                    textAlign: TextAlign.center,
+                    style: EsiType.body.copyWith(color: EsiPalette.faint, fontSize: 12),
+                  ),
+                  const SizedBox(height: EsiSpace.sm),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: onScan,
+                          icon: const Icon(Icons.qr_code_scanner, size: 18),
+                          label: const Text('Scan'),
+                        ),
+                      ),
+                      const SizedBox(width: EsiSpace.sm),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: onPaste,
+                          icon: const Icon(Icons.content_paste, size: 17),
+                          label: const Text('Paste'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ],

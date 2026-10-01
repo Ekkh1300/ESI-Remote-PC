@@ -210,16 +210,24 @@ class ConnectionNotifier extends Notifier<ConnectionStatus> {
       unawaited(socket.recycle());
     }
 
-    _attachSocket(socket);
-
-    // Re-read the handshake whenever the address, port or pin changes.
-    unawaited(_refresh(machine));
-
+    // Riverpod does not give a Notifier its `state` until build() has returned, so neither
+    // of these may run inline: `_attachSocket` reads `state.socketState`, `_refresh` reads
+    // `state.busy`, and both assign to `state`. Doing it here threw "Tried to read the state
+    // of an uninitialized provider", which put the whole shell on a blank screen for every
+    // paired phone. One turn later the state exists.
+    var alive = true;
     ref.onDispose(() {
+      alive = false;
       unawaited(_socketSubscription?.cancel());
     });
 
-    return state;
+    Future<void>.microtask(() {
+      if (!alive) return;
+      _attachSocket(socket);
+      unawaited(_refresh(machine));
+    });
+
+    return const ConnectionStatus();
   }
 
   void _attachSocket(EsiWebSocket? socket) {

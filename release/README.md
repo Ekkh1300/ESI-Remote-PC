@@ -5,13 +5,13 @@ Two files. That is the whole delivery.
 | File | Size | What it is |
 |---|---|---|
 | `ESI-RemotePC-Setup-1.0.0-x64.exe` | 43.8 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.0.apk` | 69.7 MB | The Android app. |
+| `ESI-RemotePC-1.0.0.apk` | 69.9 MB | The Android app. |
 
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  5ECF1AD33FFD7B702F57FF9EC60CDBB7
-ESI-RemotePC-1.0.0.apk             02253FA591E2EC1037B83FADCDC824E9
+ESI-RemotePC-Setup-1.0.0-x64.exe  F135DB584F1F8BD19ECAD8EE300BAE14
+ESI-RemotePC-1.0.0.apk             1070B0A46EF23B892963FB678FC0D6C1C
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -60,8 +60,15 @@ gets missed in an audit.
 
 1. Copy `ESI-RemotePC-1.0.0.apk` to the phone and open it, or install with `adb install`.
 2. The app broadcasts on the LAN and finds the PC by itself. If it does not, enter the
-   address by hand.
-3. Approve on the PC, then scan the QR.
+   address by hand. The certificate pin comes from the PC's pairing page; it is never filled
+   in from discovery, because a value from the wire is not evidence.
+3. Press **Pair**. The phone asks the PC for a code and shows six digits.
+4. Approve it **on the PC**, in the prompt that appears there.
+5. The prompt shows a QR code. Scan it on the phone, or paste its contents. That QR carries
+   the one-time secret, and the phone cannot collect the credentials without it.
+
+Step 5 is not an extra step. The secret cannot exist before step 3, because the PC mints it
+while handling the request that step 3 makes — which is the whole reason the QR exists.
 
 The app is a **release** build. It is signed with the debug key, so Android will ask you to
 allow installation from an unknown source. Per-ABI builds are 22–28 MB if you would rather
@@ -83,7 +90,7 @@ Worth reading before you trust this on a real machine.
 
 **Verified by running it.** The Windows build is green end to end: 171 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
-that was repeated from the delivered installer file. The Android side is 138 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 146 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
@@ -165,8 +172,77 @@ a message saying so and giving the pairing page address, because installing a se
 then looking for a window to click is a reasonable thing to expect and this product cannot
 meet it.
 
-**The app has never been on a phone.** It has been driven against a real agent from the
-harness, and the emulator install and launch were checked, but no human has held it.
+**The app has now been on a device, and it was broken in five separate ways.** Every one of
+these was invisible to 138 passing Dart tests, because not one of them drove a navigation,
+opened a connection, or read the stored state back.
+
+The APK was installed on an Android 16 emulator and pointed at a real agent on this machine.
+Discovery found the PC on its own (`10.0.2.2:48220`, subnet sweep and UDP broadcast; mDNS
+correctly reported no answer rather than pretending otherwise). Pairing then failed, and kept
+failing, for five unrelated reasons — any one of which would have been enough on its own:
+
+1. **Pairing could not be started.** The app navigated with `pushNamed('/pairing')`, and
+   go_router resolves a name through `RouteMatchList.namedLocation`, which walks the match
+   list and dereferences each route's `name`. No route declared one, so every attempt threw
+   `Null check operator used on a null value` before the request was ever sent. The exception
+   escaped ahead of the code that clears the button's busy flag, so the Pair button stayed
+   greyed out afterwards and the app looked merely busy rather than broken.
+2. **The pairing secret was demanded before it could exist.** The form required a pairing
+   secret, but the PC mints that secret while handling the pairing request, and only ever
+   hands it out on a QR shown *afterwards* — on the approval prompt, or at
+   `/pairing?code=…`. The two requirements deadlocked, so pairing was impossible from the
+   phone by every route. Worse, pasting a secret from an earlier attempt made the PC consume
+   the new one before its unwrap failed, because §5.4 claims delivery before it tries. An
+   attempt now starts with no secret; the waiting screen offers Scan and Paste for the PC's QR
+   while the attempt is live; the poll omits `secret=` until one has been adopted; and a poll
+   that returns `error` *because the secret is still missing* is treated as the cue to scan
+   rather than as a failure.
+3. **The client was closed before it was used.** `PairingService` closed its HTTP client in a
+   `finally` wrapped around the pairing *request*, then used that same closed client for every
+   poll of the attempt. Each poll failed with `Client is already closed`, so the credentials
+   could never be collected however correct the secret was — and the only symptom was a retry
+   loop that reads like the PC being flaky.
+4. **A successful pairing did not survive being saved.** `MachineStore.loadAll` rebuilt each
+   machine from the index, and the index is only a pointer list (`deviceId`, `host`, `port`);
+   the master secret lives in the record that pointer names. Every machine came back with no
+   secret, so the app reported *"Pairing did not finish"* on every screen, forever, with the
+   correct secret sitting on disk next to it. There were no round-trip tests for the store at
+   all; there are eight now.
+5. **A paired phone landed on a blank screen.** `ConnectionNotifier.build` called
+   `_attachSocket` and `_refresh` inline, and both read and assign `state` — which Riverpod
+   does not initialise until `build` has returned — then ended with `return state`. Opening any
+   paired PC threw `ProviderException: Tried to use a provider that is in error state` and the
+   shell rendered as blank grey. The widget tests built the shell with *nothing* paired, which
+   is exactly the state that does not trigger it.
+
+On the rebuilt APK the same script, unchanged, completes: discovery → six-digit code →
+approval on the PC → secret read from the QR → credentials decrypted → machine stored →
+dashboard **Live**, streaming signed telemetry over the WebSocket (CPU, memory, GPU,
+290 processes, 5067 threads, 12 logical processors). The device id the phone reports,
+`181d76c2797b6128`, is the one the agent has on file.
+
+**The CLI install path was broken too, and nothing caught it.** `esirc install` could not
+create the service at all: it passed `start= 2`, the numeric `ServiceStartMode`, where `sc.exe`
+wants a keyword and answers `ERROR: Invalid start= field`. The shipped installer's own `[Code]`
+had it right, which is why the `.exe` worked and only the CLI was broken. Verified after the
+fix: `esirc install` reports *created* and *started*, and the service reaches `Running`.
+
+**Still open, and it matters for a machine you are not standing at.** After this machine
+rebooted, the installed service never came back, and `sc start` answered 87 with no
+delete-pending key — on a registration the installer had itself produced and that had run for
+two and a half hours beforehand. The cause was not established. What was *ruled out*, by
+building probe services rather than by argument: an unquoted `ImagePath` over a path with
+spaces (a probe with the identical key starts and runs), the `WOW64 = 0x14c` 32-bit flag the
+installer's 32-bit `sc.exe` does set on this x64 binary, `requiredPrivileges`, and
+`FailureActions`. Running the service executable by hand works perfectly, so the binary is not
+at fault, and re-running the installer restored the service. Recorded as D27.
+
+**The other half of "the program does not open" is by design, and is now said out loud.**
+This product has no window. The agent is a Windows service; the tray icon and the pairing
+approval prompt exist only while somebody is signed in to the PC. The installer now ends with
+a message saying so and giving the pairing page address, because installing a service and
+then looking for a window to click is a reasonable thing to expect and this product cannot
+meet it.
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed

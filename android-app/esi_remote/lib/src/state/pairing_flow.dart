@@ -32,9 +32,20 @@ class PairingRequest {
 
   final EsiEndpoint endpoint;
 
-  /// The one-time secret from §5.4. Without it the agent approves but never releases the
-  /// credentials, so this is required rather than optional.
+  /// The one-time secret from §5.4.
+  ///
+  /// It is deliberately allowed to be empty when the attempt starts, because it cannot
+  /// exist yet: the agent mints it while handling `POST /pair/request`, and the only
+  /// things that ever carry it off the PC are the QR on the approval prompt and the QR on
+  /// `/pairing?code=…` — both of which need the attempt to already be running. Requiring
+  /// it up front made pairing impossible to start from the phone at all.
+  ///
+  /// Without it the agent still approves the attempt, but never releases the credentials,
+  /// so it has to arrive by scanning that QR while this attempt is still live.
   final Uint8List provisioningSecret;
+
+  /// True once a scanned QR has supplied the secret this attempt needs.
+  bool get hasSecret => provisioningSecret.isNotEmpty;
 
   final PairingSource source;
   final String? macAddress;
@@ -64,7 +75,9 @@ class PairingFlowNotifier extends Notifier<PairingFlowState> {
       deviceName: _deviceName,
       osVersion: _osVersion,
       appVersion: _appVersion,
-      provisioningSecret: request.provisioningSecret,
+      // Read from the current state on every poll, not from the request captured here: the
+      // secret arrives by QR scan part-way through the attempt.
+      provisioningSecret: () => state.request?.provisioningSecret ?? Uint8List(0),
       onProgress: (progress) {
         if (state.progress?.isTerminal ?? false) return;
         state = state.copyWith(progress: progress);
@@ -73,6 +86,28 @@ class PairingFlowNotifier extends Notifier<PairingFlowState> {
     );
 
     state = state.copyWith(progress: result, finished: true);
+  }
+
+  /// Adopts the one-time secret from a QR scanned while this attempt is running.
+  ///
+  /// This is the other half of [PairingRequest.provisioningSecret]: the attempt has to be
+  /// created before the PC will show a QR, and the QR is what carries the secret back. The
+  /// attempt object in the QR's polling URL is the same one already running, so adopting
+  /// the secret in place is what the protocol expects — it does not start a second attempt,
+  /// and a second attempt would be a different secret the PC has never seen.
+  void adoptSecret(Uint8List secret) {
+    final request = state.request;
+    if (request == null || secret.isEmpty) return;
+
+    state = state.copyWith(
+      request: PairingRequest(
+        endpoint: request.endpoint,
+        provisioningSecret: secret,
+        source: request.source,
+        macAddress: request.macAddress,
+        nickname: request.nickname,
+      ),
+    );
   }
 
   /// Cancels the phone's side. The attempt on the PC stays pending and expires on its own,

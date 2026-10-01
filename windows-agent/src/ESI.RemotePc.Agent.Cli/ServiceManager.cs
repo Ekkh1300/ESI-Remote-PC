@@ -207,7 +207,12 @@ internal static class ServiceManager
 
         // sc.exe rather than ServiceController.Create: the managed API was deprecated for
         // creation in .NET 9 and offers no way to set the description or the account.
-        var args = $"create {name} binPath= {quoted} start= {(int)start} DisplayName= \"{displayName}\"";
+        //
+        // `start=` takes a keyword, not the numeric ServiceStartMode. Passing the number makes
+        // sc.exe print its usage and return "Invalid start= field", so the service was never
+        // created at all and the CLI reported it as a failure to create.
+        var args =
+            $"create {name} binPath= {quoted} start= {StartModeKeyword(start)} DisplayName= \"{displayName}\"";
 
         if (account == ".")
         {
@@ -241,6 +246,23 @@ internal static class ServiceManager
 
         return true;
     }
+
+    /// <summary>
+    /// The word <c>sc.exe</c> expects for a start mode.
+    /// <para>
+    /// It accepts boot, system, auto, demand, disabled or delayed-auto, and rejects the
+    /// numeric value that <see cref="ServiceStartMode"/> is built from with "Invalid start=
+    /// field" - which is what made <c>esirc install</c> fail to create the service at all.
+    /// </para>
+    /// </summary>
+    private static string StartModeKeyword(ServiceStartMode start) => start switch
+    {
+        ServiceStartMode.Boot => "boot",
+        ServiceStartMode.System => "system",
+        ServiceStartMode.Automatic => "auto",
+        ServiceStartMode.Disabled => "disabled",
+        _ => "demand",
+    };
 
     /// <summary>
     /// Sets the failure-recovery actions, which the managed API does not expose.
