@@ -169,12 +169,28 @@ public sealed class AgentFixture : IAsyncLifetime
     /// </summary>
     private static int _portCounter = -1;
 
+    /// <summary>
+    /// A port Kestrel can actually bind, not merely one that looks unused.
+    /// <para>
+    /// Two things make this less trivial than picking a free number. Kestrel listens on
+    /// <c>IPAddress.Any</c>, so a port that is free on the loopback interface can still be
+    /// taken on the wildcard address. And Windows reserves whole port ranges - Hyper-V and
+    /// WinNAT do it, and <c>netsh interface ipv4 show excludedportrange protocol=tcp</c>
+    /// lists them - where binding fails with <c>WSAEACCES</c> rather than
+    /// <c>EADDRINUSE</c>. The dynamic range starts at 49152, so seeding below an ephemeral
+    /// port walks straight into those reservations, and on a machine that has ever run the
+    /// emulator every test in the file then fails with "forbidden by its access
+    /// permissions" - a red suite that says nothing about the code under test.
+    /// </para>
+    /// </summary>
     private static int AllocatePort()
     {
         var current = Volatile.Read(ref _portCounter);
 
         if (current < 0)
         {
+            // Seed below the dynamic range so successive allocations walk through ports
+            // that are less likely to be in flight, then verify each one by binding it.
             var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var seed = ((IPEndPoint)listener.LocalEndpoint).Port - 64;
@@ -185,7 +201,42 @@ public sealed class AgentFixture : IAsyncLifetime
                 current = seed;
         }
 
-        return Interlocked.Increment(ref _portCounter);
+        for (var attempt = 0; attempt < 512; attempt++)
+        {
+            var candidate = Interlocked.Increment(ref _portCounter);
+            if (candidate is < 1024 or > 65535)
+                continue;
+
+            if (CanBind(candidate))
+                return candidate;
+        }
+
+        throw new InvalidOperationException(
+            "Could not find a TCP port the test agent can bind. " +
+            "Run 'netsh interface ipv4 show excludedportrange protocol=tcp' and look for a " +
+            "reservation covering the range the suite is seeding from.");
+    }
+
+    /// <summary>True when a wildcard listener can take <paramref name="port"/>.</summary>
+    private static bool CanBind(int port)
+    {
+        try
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Any, port);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            // Reserved by Windows (WSAEACCES), already listening (EADDRINUSE), or held by
+            // an outbound connection. All three mean "not this one".
+            return false;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

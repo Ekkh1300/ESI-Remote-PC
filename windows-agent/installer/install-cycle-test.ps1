@@ -62,9 +62,13 @@ function Assert-That {
 function Invoke-Setup {
     param([string[]] $Arguments)
 
-    $full = (Resolve-Path (Join-Path $PSScriptRoot $Setup)).Path
-    Write-Host "   running $([IO.Path]::GetFileName($full)) $($Arguments -join ' ')"
-    $p = Start-Process -FilePath $full -ArgumentList $Arguments -PassThru -Wait
+    # $SetupPath is resolved once at start-up, so an absolute -Setup is used as given.
+    # Joining it to $PSScriptRoot regardless produced "E:\...\installer\E:\...\setup.exe",
+    # which Resolve-Path then rejected - from every install step, while the steps that only
+    # assert things were already gone kept reporting ok. That is how the repository's only
+    # installer check failed inside the one entry point whose job is to run it.
+    Write-Host "   running $([IO.Path]::GetFileName($SetupPath)) $($Arguments -join ' ')"
+    $p = Start-Process -FilePath $SetupPath -ArgumentList $Arguments -PassThru -Wait
     Write-Host "   setup exit code: $($p.ExitCode)"
     return $p.ExitCode
 }
@@ -220,7 +224,19 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Write-Host 'Installer cycle test' -ForegroundColor White
-Write-Host "  setup: $Setup"
+
+# Resolve the installer once, and refuse to start without it. Step 1 only asserts that the
+# machine is clean - which is also true of a machine where nothing was ever installed - so a
+# missing installer used to surface as an exception three steps in, with green steps above
+# it and no setup ever having run.
+$SetupPath = if ([IO.Path]::IsPathRooted($Setup)) { [IO.Path]::GetFullPath($Setup) }
+             else { (Resolve-Path (Join-Path $PSScriptRoot $Setup)).Path }
+
+if (-not (Test-Path $SetupPath)) {
+    throw "the installer is not there: $SetupPath (given as '$Setup')"
+}
+
+Write-Host "  setup: $SetupPath"
 Write-Host "  port : $HttpsPort"
 
 Test-Step '1. a clean uninstall first, so step 2 is a genuine upgrade' {
@@ -246,10 +262,11 @@ Test-Step '3. install AGAIN, over its own output (the upgrade path)' {
     # running service only marks the key, so an un-waited create failed 1073 silently and
     # start then failed 87, leaving a registered service that never ran.
     #
-    # It is slower than it should be: the session helper from step 2 holds the agent's
-    # service handle open, so the installer's wait for the key to disappear times out at
-    # 30 s. That is ROADMAP D19, and it is why the timing below is a ceiling rather than a
-    # target. The run still has to end with a working agent, which is the part that matters.
+    # It used to be slower than it should be: the installer's wait for the service key to
+    # disappear timed out at 30 s and printed a warning telling the user to reboot. The
+    # cause was never established and it no longer reproduces — see ROADMAP D20. The note
+    # below is what tells us if it comes back, and the assertions are about the outcome,
+    # which is the part that matters.
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $code = Invoke-Setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
     $elapsed = $sw.Elapsed.TotalSeconds

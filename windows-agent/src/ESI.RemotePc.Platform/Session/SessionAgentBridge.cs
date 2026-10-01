@@ -175,6 +175,19 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
 
             _state = SessionAgentStateValue.Starting;
 
+            // Release whatever instance is left over before making another one. The name
+            // allows a single server instance, so overwriting this reference without
+            // closing it strands an open instance that nothing can reach, and every later
+            // CreatePipeServer fails with "All pipe instances are busy" - after which the
+            // bridge can never reconnect. The previous pipe is only ever here when the pump
+            // has already finished with it, so nothing is being pulled out from under a
+            // live connection.
+            if (_pipe is not null)
+            {
+                await SafeDisposeAsync(_pipe).ConfigureAwait(false);
+                _pipe = null;
+            }
+
             // The pipe must be bidirectional. The service reads the agent's ready, heartbeat,
             // frame and result messages, and writes the agent's commands, input events and
             // pairing prompts. Opening it In-only lets the service read a stream nothing can
@@ -291,6 +304,12 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
         }
         finally
         {
+            // Closing the instance this pump was reading is what frees the single server
+            // slot the pipe name allows. Handing it back here rather than leaving it for
+            // the next EnsureConnectedAsync is the difference between a reconnect and a
+            // permanent "All pipe instances are busy".
+            await SafeDisposeAsync(pipe).ConfigureAwait(false);
+
             _connected = false;
             _state = SessionAgentStateValue.NotRunning;
         }

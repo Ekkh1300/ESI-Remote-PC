@@ -114,6 +114,25 @@ function Invoke-Step {
     Write-Host ("    done in {0:N1}s" -f $watch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 }
 
+function Resolve-Iscc {
+    # Inno's compiler is rarely on PATH, and an installation is not always where the
+    # installer expects it - this machine has Inno Setup 7, and the repository predates it.
+    $onPath = Get-Command 'iscc.exe' -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+
+    foreach ($candidate in @(
+        "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 5\ISCC.exe"
+    )) {
+        if ($candidate -and (Test-Path $candidate)) { return $candidate }
+    }
+
+    return $null
+}
+
 Invoke-Step 'restore' { & $dotnetExe restore $solution }
 
 Invoke-Step 'build' { & $dotnetExe build $solution -c $Configuration --no-restore -v minimal }
@@ -180,10 +199,30 @@ if (-not $SkipPublish) {
 
 if ($WithInstallCycle) {
     Invoke-Step 'installer cycle (install, reinstall, uninstall, reinstall)' {
+        # Compile the installer here instead of trusting whatever is in artifacts. The
+        # cycle is the only thing that ever tests the installer, and running it against a
+        # binary left over from an earlier build reports twenty-six green checks on code
+        # that is no longer in the tree - exactly the false confidence the test exists to
+        # prevent. It happened: an install cycle passed against an installer built the
+        # day before, while the code under review was never installed.
         $setup = Join-Path $artifacts 'ESI-RemotePC-Setup-1.0.0-x64.exe'
-        if (-not (Test-Path $setup)) {
-            throw "Build the installer first - iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss. Looking for $setup"
+        $iscc  = Resolve-Iscc
+
+        if (-not $iscc) {
+            throw ("Inno Setup is not installed, so the installer under test would be stale. " +
+                   "Install it from https://jrsoftware.org/isdl.php, or build $setup by hand " +
+                   "and run installer\install-cycle-test.ps1 against it.")
         }
+
+        Write-Host "    iscc: $iscc"
+        & $iscc (Join-Path $root 'installer\ESI-RemotePC.iss')
+        if ($LASTEXITCODE -ne 0) { throw "iscc failed with exit code $LASTEXITCODE" }
+
+        if (-not (Test-Path $setup)) {
+            throw "iscc reported success but there is no installer at $setup"
+        }
+
+        Write-Host "    installer: $setup ($([math]::Round((Get-Item $setup).Length / 1MB, 1)) MB, built $((Get-Item $setup).LastWriteTime.ToString('HH:mm:ss')))"
 
         & (Join-Path $root 'installer\install-cycle-test.ps1') -Setup $setup
     }

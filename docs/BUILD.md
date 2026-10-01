@@ -97,6 +97,10 @@ The script reads `..\artifacts\publish\*.exe`, so `build.ps1` must run first unl
 publish directory is already populated. `OutputDir` is `..\artifacts` and the output name is
 `ESI-RemotePC-Setup-<version>-x64.exe`.
 
+`iscc.exe` is usually not on `PATH`; `build.ps1` looks for it in Inno's default install
+locations as well (Setup 5, 6 and 7). `build.ps1 -WithInstallCycle` compiles the installer
+itself before testing it, so that path needs no manual `iscc` step.
+
 What the installer does, in order:
 
 | Step | Action |
@@ -300,24 +304,31 @@ connecting to the agent's port rather than by reading the SCM's opinion. It need
 administrator rights, so it is opt-in:
 
 ```powershell
-iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss
 powershell -File windows-agent\build.ps1 -SkipTests -SkipPublish -WithInstallCycle
 ```
+
+The cycle step compiles the installer itself: it finds `iscc.exe` on `PATH` or in Inno's
+default install locations (this machine has Inno Setup 7, which the repository predates)
+and fails rather than testing a stale binary. There is no separate `iscc` line to forget —
+see below for why that mattered.
 
 It exists because the installer is the only artefact that no automated check ever ran, and
 because every defect it has found was invisible everywhere else: a service that was
 registered but could not be started, a logon task that could never fire, an upgrade that
-failed on locked files, and an uninstall that reported success while leaving 139 MB behind.
-All four look identical to a user — installed, and nothing happens.
+failed on locked files, an uninstall that reported success while leaving 139 MB behind,
+and a cycle that checked only that the installer *existed* — so it cheerfully reported 26
+green checks against a `.exe` compiled the day before, from code that was not in the tree.
+All five look identical to a user: something is running, and it is not what you just wrote.
 
-It does not pass cleanly on a machine where somebody is signed in, for a reason worth
-stating rather than hiding: the session helper holds the agent's service handle open, so
-`sc delete` only marks the key and the wait for it to disappear times out. The installer
-recovers and logs exactly what it saw, so the run is correct but slow and it prints a
-warning that overstates the problem. See `ROADMAP.md` **D19** and
-[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — *Installing or reinstalling is slow*. The fix
-is to stop the helper before the file copy, which the installer already tries; what is
-missing is that the agent's shutdown should not be waiting on the pipe at all.
+It does not pass cleanly on a machine where somebody is signed in, or it has not always —
+once, and only once, it timed out waiting for the service key to disappear and printed a
+warning telling the user to reboot and run it again. The installer recovered anyway, and
+neither a clean measurement nor a repeat of the cycle reproduces the delay: the service
+process exits in under a second and the key goes with it. So the honest statement is that
+the warning can appear and be wrong, not that the cycle is known to be slow. See
+`ROADMAP.md` **D20** and [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — *Installing or
+reinstalling is slow*. What made it findable at all is that the installer logs what it saw
+instead of hiding it.
 
 By hand, on a throwaway VM: install, `esirc status`, open
 `https://localhost:48220/pairing`, confirm the device id on the page matches the console
