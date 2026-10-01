@@ -11,7 +11,7 @@ SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.0-x64.exe  F135DB584F1F8BD19ECAD8EE300BAE14
-ESI-RemotePC-1.0.0.apk             1070B0A46EF23B892963FB678FC0D6C1C
+ESI-RemotePC-1.0.0.apk             10A4A3526CD1BD8573FF158C54086961
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -70,9 +70,34 @@ gets missed in an audit.
 Step 5 is not an extra step. The secret cannot exist before step 3, because the PC mints it
 while handling the request that step 3 makes — which is the whole reason the QR exists.
 
-The app is a **release** build. It is signed with the debug key, so Android will ask you to
-allow installation from an unknown source. Per-ABI builds are 22–28 MB if you would rather
-have the one that matches your phone.
+**Signed, and how to install it.** The APK is a Flutter release build — AOT compiled,
+tree-shaken, minified — signed with a 4096-bit RSA key held for this delivery, certificate
+`CN=ESI Remote PC, OU=Release, O=ESI Remote PC, C=US`, SHA-256
+`de2e20eb3795c5d25baaf191d8c4f44a886c7268f399e9f16592acb75b156f68`. **Earlier builds of this
+app were signed with the Android debug key and are not installable over this one** — see the
+troubleshooting below, because the error message does not say that.
+
+Because it is not from the Play Store, Android asks you to allow installation from that source.
+With a file manager: open the APK, and if it refuses, go to **Settings → Apps → Special app
+access → Install unknown apps → pick your file manager or browser → Allow**. Then open the APK
+again. Over ADB it needs no such permission:
+
+```
+adb install ESI-RemotePC-1.0.0.apk
+```
+
+It carries `arm64-v8a`, `armeabi-v7a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
+
+**If it refuses to install**, it is one of exactly two things:
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, or *App not installed* when an older copy is already on the phone | An earlier build signed with the **debug** key is installed. Android refuses to replace an app with one signed by a different key, and the message never mentions signatures. | Uninstall the old one first, then install this. You will have to pair again: the master secret lives in app-private storage that an uninstall removes |
+| *For your security, your phone is not allowed to install unknown apps from this source* | The per-source install permission has not been granted | **Settings → Apps → Special app access → Install unknown apps**, as above |
+
+Both were reproduced here: installing the release-signed APK over the debug-signed one fails
+with `Existing package signatures do not match`, and the same APK installs and launches on a
+clean device.
 
 **Why the QR matters.** Pairing starts with an unauthenticated request the phone makes to
 the PC. If the PC sent the resulting secret back over the network, anyone on the LAN could
