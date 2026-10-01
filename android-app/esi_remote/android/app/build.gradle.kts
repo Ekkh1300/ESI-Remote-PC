@@ -40,6 +40,19 @@ android {
         versionName = flutter.versionName
     }
 
+    packaging {
+        jniLibs {
+            // The 32-bit ARM ABI is dropped, and not through `ndk.abiFilters`: that filter
+            // does not reach prebuilt .so files inside third-party AARs, so ML Kit's copy of
+            // the barcode model survived while Flutter's own engine and app libraries for
+            // that ABI did not. aapt then advertised `armeabi-v7a` support from the leftover
+            // file, and a 32-bit phone would have installed the package and died on launch
+            // with an UnsatisfiedLinkError. Excluding the directory is the only thing that
+            // makes the advertised ABI list true.
+            excludes += setOf("**/armeabi-v7a/**")
+        }
+    }
+
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
@@ -58,6 +71,15 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // A universal APK carries the Flutter engine and the Dart AOT library once per
+            // ABI, and that is nearly all of it: 66.5 MB of a 69.9 MB package was lib/. The
+            // build is invoked with
+            //     flutter build apk --release --target-platform android-arm64,android-x64
+            // which is what actually selects the ABIs; the packaging rule above removes the
+            // rest. `x86_64` is emulator- and Chromebook-only, but without it the app cannot
+            // be installed on an emulator at all, and an artefact nobody can install is not
+            // one whose behaviour anybody can check. If a 32-bit ARM phone ever has to be
+            // supported, drop the excludes rule and add the ABI to --target-platform.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

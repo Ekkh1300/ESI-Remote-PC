@@ -5,13 +5,13 @@ Two files. That is the whole delivery.
 | File | Size | What it is |
 |---|---|---|
 | `ESI-RemotePC-Setup-1.0.0-x64.exe` | 43.8 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.0.apk` | 69.9 MB | The Android app. |
+| `ESI-RemotePC-1.0.0.apk` | 51.1 MB | The Android app. |
 
 SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.0-x64.exe  F135DB584F1F8BD19ECAD8EE300BAE14
-ESI-RemotePC-1.0.0.apk             10A4A3526CD1BD8573FF158C54086961
+ESI-RemotePC-1.0.0.apk             52F7DAC90BF46B8D3E3974F158D48F0
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -86,7 +86,23 @@ again. Over ADB it needs no such permission:
 adb install ESI-RemotePC-1.0.0.apk
 ```
 
-It carries `arm64-v8a`, `armeabi-v7a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
+It carries `arm64-v8a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
+
+**Why 51 MB and not 69.9.** A universal APK ships Flutter's engine and the compiled Dart
+twice or three times — once per CPU architecture — and that was almost the entire package:
+**66.5 MB of the 69.9 MB was `lib/`.** The 32-bit ARM ABI was dropped, taking 18.8 MB with
+it. `x86_64` was kept deliberately even though it only serves emulators and Chromebooks,
+because without it the app cannot be installed on an emulator at all, and an artefact nobody
+can install is not one whose behaviour anyone can check.
+
+Removing it took a second step that is worth knowing about if you ever touch this again.
+`ndk.abiFilters` does not reach prebuilt `.so` files inside third-party AARs, so ML Kit's copy
+of the barcode model survived the filter while Flutter's own libraries for that ABI did not.
+`aapt` then advertised `armeabi-v7a` support from the leftover file — so a 32-bit phone would
+have installed the package and died on launch with an `UnsatisfiedLinkError`. The exclusion
+is a packaging rule over the directory, which is what makes the advertised list true. The
+build is invoked with
+`flutter build apk --release --target-platform android-arm64,android-x64`.
 
 **If it refuses to install**, it is one of exactly two things:
 
