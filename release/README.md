@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  59A785B6CC4ADAB1B4AD568FC212FC2A
+ESI-RemotePC-Setup-1.0.0-x64.exe  5ECF1AD33FFD7B702F57FF9EC60CDBB7
 ESI-RemotePC-1.0.0.apk             02253FA591E2EC1037B83FADCDC824E9
 ```
 
@@ -81,7 +81,7 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 162 unit and integration
+**Verified by running it.** The Windows build is green end to end: 171 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
 that was repeated from the delivered installer file. The Android side is 138 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
@@ -128,6 +128,35 @@ every one of them produced "installed, and nothing happens":
   removed. Both are now stopped before anything is written or deleted.
 - **The post-install check only asked whether the service *existed*.** It now also connects to
   the agent's port.
+
+Three more, all found once the cycle was pointed at the right binary:
+
+- **The cycle could not be run from the entry point that ships it.**
+  `install-cycle-test.ps1` joined even an absolute `-Setup` to its own directory, so
+  `build.ps1` handed it `E:\…\installer\E:\…\setup.exe` and every install step threw —
+  while the steps that only assert the machine is clean reported ok. It now refuses to start
+  without an installer rather than failing three steps in with green above it.
+- **It was testing a day-old installer.** The build checked only that the setup file
+  *existed*, so an install cycle cheerfully passed 26 checks against a binary compiled the
+  day before, installed from code that was not in the tree. The step now compiles the
+  installer itself and fails if it cannot.
+- **The test suite could go red for no reason at all.** Port allocation seeded from the
+  Windows dynamic range, where Hyper-V and WinNAT reserve whole blocks; binding one of those
+  fails with "access forbidden" rather than "in use", so 22 integration tests died saying
+  nothing about the code under test. Every candidate is now probed on `IPAddress.Any`, the
+  address Kestrel actually binds.
+
+**A defect in the product itself, found by reading its own log.** The agent's supervisor
+orphaned an open named-pipe server instance on each reconnect: the pump stopped without
+closing the pipe it had been reading, and the next attempt created a replacement over the
+top of it. The pipe name allows one server instance, so from the second reconnect onward
+`CreatePipeServer` failed with `All pipe instances are busy` and the session helper could
+never attach again — meaning remote input and screen capture would quietly stop working the
+first time somebody signed out and back in. The agent's log already contained that exact
+exception, which is the only reason it was findable. Five forced restarts of the helper on
+the old build produced 168 lines of the error and not one successful reconnect; on the
+build in this archive the same five restarts produce five `Session agent connected` lines
+and no error.
 
 **The other half of "the program does not open" is by design, and is now said out loud.**
 This product has no window. The agent is a Windows service; the tray icon and the pairing
