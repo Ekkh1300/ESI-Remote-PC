@@ -57,7 +57,7 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "addfirewall"; Description: "Add a Windows Firewall rule for the agent's LAN port"; \
   GroupDescription: "Networking:"; Flags: checkedonce
 Name: "createdesktop"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; \
-  Flags: unchecked
+  Flags: checkedonce
 
 [Files]
 ; One shared self-contained layout, not three self-contained single files.
@@ -82,6 +82,17 @@ Source: "..\..\release\esi.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; The service creates this on first run; making it here means the ACLs are set once, at
 ; install, instead of by a service running as LocalSystem.
 Name: "{commonappdata}\ESI-RemotePC"; Permissions: users-modify
+
+[InstallDelete]
+; Shortcuts that an earlier version of this installer created and that no longer have a
+; counterpart. Inno overwrites a shortcut whose name is unchanged and silently leaves every
+; other file alone, so renaming an entry does not remove the old one: upgrading left the
+; user with a Start Menu and a desktop shortcut that still ran `esirc status`, still had no
+; icon, and still flashed a console window and closed. Renaming an entry is therefore a
+; breaking change unless the old name is deleted here.
+Type: files; Name: "{group}\ESI Remote PC (status and pairing).lnk"
+Type: files; Name: "{group}\Pair a device.url"
+Type: files; Name: "{autodesktop}\ESI Remote PC (status and pairing).lnk"
 
 [Icons]
 ; The desktop and Start Menu entries open the pairing page in the browser. They used to run
