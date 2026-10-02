@@ -32,7 +32,10 @@ AppUpdatesURL={#AppURL}
 DefaultDirName={autopf}\ESI Remote PC
 DefaultGroupName=ESI Remote PC
 DisableProgramGroupPage=yes
-UninstallDisplayIcon={app}\ESI.RemotePc.Agent.Service.exe
+; The setup executable gets the same mark as the shortcuts. Without it the installer has the
+; generic Inno Setup icon, which reads as "some other program" in a downloads folder.
+SetupIconFile=..\..\release\esi.ico
+UninstallDisplayIcon={app}\esi.ico
 UninstallDisplayName={#AppName}
 OutputDir=..\artifacts
 OutputBaseFilename=ESI-RemotePC-Setup-{#AppVersion}-x64
@@ -70,6 +73,10 @@ Name: "createdesktop"; Description: "Create a desktop shortcut"; GroupDescriptio
 ; the install directory is a .NET application directory, not three independent binaries.
 Source: "..\artifacts\publish\*"; DestDir: "{app}"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
+; The shortcuts point at this rather than at one of the executables, because the executables
+; are 160 KB .NET apphost launchers that carry no icon of their own - every shortcut came
+; out with an empty IconLocation, which is what "there is no icon" meant.
+Source: "..\..\release\esi.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]
 ; The service creates this on first run; making it here means the ACLs are set once, at
@@ -77,13 +84,25 @@ Source: "..\artifacts\publish\*"; DestDir: "{app}"; \
 Name: "{commonappdata}\ESI-RemotePC"; Permissions: users-modify
 
 [Icons]
-Name: "{group}\ESI Remote PC (status and pairing)"; \
-  Filename: "{app}\ESI.RemotePc.Agent.Cli.exe"; Parameters: "status"; \
-  WorkingDir: "{app}"; Comment: "Show the agent status and the pairing address"
-Name: "{group}\Pair a device"; Filename: "https://localhost:{#HttpsPort}/pairing"
-Name: "{group}\Uninstall ESI Remote PC"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\ESI Remote PC"; Filename: "{app}\ESI.RemotePc.Agent.Cli.exe"; \
-  Parameters: "status"; WorkingDir: "{app}"; Tasks: createdesktop
+; The desktop and Start Menu entries open the pairing page in the browser. They used to run
+; `esirc status` directly, and that is a console program: launched from a shortcut it opens a
+; black window, prints eleven lines and closes again in about a third of a second, which is
+; indistinguishable from "nothing happens". This product has no window of its own, so the
+; pairing page is the one thing that can actually be shown to a person.
+Name: "{group}\ESI Remote PC"; \
+  Filename: "https://localhost:{#HttpsPort}/pairing"; IconFilename: "{app}\esi.ico"; \
+  Comment: "Open the pairing page for this PC"
+; Kept for anyone who wants the numbers, but through `cmd /k` so the window survives the
+; command instead of vanishing with it.
+Name: "{group}\Agent status (console)"; \
+  Filename: "{sys}\cmd.exe"; \
+  Parameters: "/k ""{app}\ESI.RemotePc.Agent.Cli.exe"" status"; \
+  WorkingDir: "{app}"; IconFilename: "{app}\esi.ico"; \
+  Comment: "Show the agent status and the pairing address"
+Name: "{group}\Uninstall ESI Remote PC"; Filename: "{uninstallexe}"; IconFilename: "{app}\esi.ico"
+Name: "{autodesktop}\ESI Remote PC"; \
+  Filename: "https://localhost:{#HttpsPort}/pairing"; IconFilename: "{app}\esi.ico"; \
+  Comment: "Open the pairing page for this PC"
 
 [Run]
 ; Service registration is not here. It is in RegisterEverything, in [Code], because the
@@ -428,6 +447,18 @@ begin
       'looking at by hand in an elevated console.');
     Exit;
   end;
+
+  { Inno Setup is a 32-bit program, so the sc.exe it runs is the 32-bit one, and the 32-bit
+    sc.exe stamps WOW64 = IMAGE_FILE_MACHINE_I386 into the key it creates. Every executable
+    this installer publishes is x64. The SCM honours that value when it launches the service
+    image, so a service carrying a 32-bit flag over a 64-bit binary is a registration that
+    cannot start - and on this machine it failed on every single boot with SCM 7000
+    "The parameter is incorrect", while the same executable ran perfectly when launched by
+    hand. Removing the value leaves the key describing what is actually in the file. }
+  Exec(ExpandConstant('{sys}\reg.exe'),
+       'delete ' + Q + 'HKLM\SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent' + Q +
+       ' /v WOW64 /f',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   { The steps below are refinements. A failure in any of them leaves a working service, so
     they are logged rather than treated as fatal. }
