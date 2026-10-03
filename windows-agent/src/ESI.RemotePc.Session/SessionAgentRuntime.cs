@@ -64,6 +64,19 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         _inputPump.Start();
         ApplyScreenGeometry();
 
+        // The anchor has to exist, and have a window handle, before the command channel is
+        // started. Post() is a BeginInvoke, and BeginInvoke throws "Invoke or BeginInvoke
+        // cannot be called on a control until the window handle has been created" if the
+        // handle is not there yet - so a pairing prompt delivered during startup produced an
+        // error on the PC and no dialog at all, while the phone sat waiting for an approval
+        // that could never be clicked. Eight of those were sitting in the log.
+        //
+        // Creating the handle before Application.Run starts pumping is not premature: the
+        // messages simply queue on a thread that has not started reading them yet, and are
+        // waiting when it does.
+        _anchor = new MessageLoopAnchor(() => Shutdown("the message loop ended"));
+        _ = _anchor.Handle;
+
         _channel.RunAsync(_stopping.Token).ContinueWith(
             task => Log.Fatal(task.Exception, "The command channel terminated"),
             TaskContinuationOptions.OnlyOnFaulted);
@@ -72,8 +85,6 @@ internal sealed class SessionAgentRuntime : ApplicationContext
 
         // A hidden form supplies the message loop without putting anything on screen. The
         // tray icon is the only thing the user should ever see from this process.
-        _anchor = new MessageLoopAnchor(() => Shutdown("the message loop ended"));
-
         _tray = BuildTrayIcon();
         _tray.Visible = true;
 

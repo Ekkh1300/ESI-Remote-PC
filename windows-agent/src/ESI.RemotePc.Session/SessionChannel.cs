@@ -28,6 +28,14 @@ internal sealed class SessionChannel : IAsyncDisposable
     private readonly Serilog.ILogger _log;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
 
+    /// <summary>
+    /// How long a single write may take before the channel is considered broken. A capture
+    /// frame is the largest thing that goes down this pipe, and the service reads
+    /// continuously, so five seconds is generous; hanging forever is not an option because
+    /// the semaphore below would then be held by a write nobody is ever going to finish.
+    /// </summary>
+    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(5);
+
     private NamedPipeClientStream? _pipe;
     private StreamReader? _reader;
     private volatile bool _connected;
@@ -166,17 +174,32 @@ internal sealed class SessionChannel : IAsyncDisposable
         await _writeGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            // Synchronous, bounded writes. A pipe's buffer is small, and a blocking write with
-            // a timeout is far easier to reason about than an async write that can complete
-            // after the reader has already torn the connection down.
-            pipe.WriteTimeout = 5_000;
-            pipe.Write(bytes, 0, bytes.Length);
-            pipe.Flush();
+            // The bound has to come from the async path. `PipeStream.WriteTimeout` is not
+            // supported on a handle opened with `PipeOptions.Asynchronous`: assigning it throws
+            // InvalidOperationException("Timeouts are not supported on this stream"), and this
+            // catch used to swallow that at Debug level - below the Information floor this
+            // process logs at - so the failure was invisible and every send quietly returned
+            // without writing a byte.
+            //
+            // The consequence was not a small one. `_connected` went false on the first send
+            // after connecting, so no heartbeat, no ready and no pairing result ever reached
+            // the service; the service saw silence, declared the agent dead 45 s later and
+            // tore the pipe down, and the agent reconnected 3 s after that. The service log
+            // showed 1675 "Session agent connected" and zero "Session agent ready" before this
+            // was found - a half-duplex channel that had looked connected from both ends
+            // since the first release. A write that cannot be bounded is better than no write
+            // at all, so the timeout is a cancellation rather than a property.
+            using var timeout = new CancellationTokenSource(WriteTimeout);
+            await pipe.WriteAsync(bytes, timeout.Token).ConfigureAwait(false);
+            await pipe.FlushAsync(timeout.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException
+            or InvalidOperationException or OperationCanceledException or TimeoutException)
         {
+            // Warning, not Debug: this is the whole channel going dark, and at Debug nobody
+            // would ever see it. That is what let it stay broken for three days.
             _connected = false;
-            _log.Debug("Could not write to the command channel: {Error}", ex.Message);
+            _log.Warning("Could not write to the command channel: {Error}", ex.Message);
         }
         finally
         {

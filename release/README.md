@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  F135DB584F1F8BD19ECAD8EE300BAE14
+ESI-RemotePC-Setup-1.0.0-x64.exe  5EBF393B4F9EC909E92BBA318365943C
 ESI-RemotePC-1.0.0.apk             52F7DAC90BF46B8D3E3974F158D48F0
 ```
 
@@ -278,12 +278,27 @@ installer's 32-bit `sc.exe` does set on this x64 binary, `requiredPrivileges`, a
 `FailureActions`. Running the service executable by hand works perfectly, so the binary is not
 at fault, and re-running the installer restored the service. Recorded as D27.
 
-**The other half of "the program does not open" is by design, and is now said out loud.**
-This product has no window. The agent is a Windows service; the tray icon and the pairing
-approval prompt exist only while somebody is signed in to the PC. The installer now ends with
-a message saying so and giving the pairing page address, because installing a service and
-then looking for a window to click is a reasonable thing to expect and this product cannot
-meet it.
+**A fourth, found the same way - from the log, not from a test. The channel between the
+service and the session helper had only ever worked in one direction.** `SessionChannel`
+set `pipe.WriteTimeout` before every write, and .NET refuses that on a handle opened
+asynchronously: the assignment throws `Timeouts are not supported on this stream`, the catch
+around it swallowed the exception, marked the channel dead and logged it at *Debug* - below
+the level this process logs at. So no heartbeat, no `ready` and no reply ever left the helper.
+The service saw silence, decided the helper had died 45 seconds later, tore the pipe down, and
+the helper reconnected 3 seconds after that. The log contained **1675 "Session agent
+connected" against zero "Session agent ready"**, and 1650 heartbeat timeouts, continuously
+since 30 September - while the phone saw a PC that answered HTTPS perfectly and did nothing
+else, because screen frames, remote input, lock state and any approval clicked on the desktop
+all travel down that pipe.
+
+The timeout is a cancellation around the async write now, and the failure is logged at
+*Warning*, because a whole channel going dark is not a debug detail. A second, smaller fault
+sat behind it: the approval prompt was posted with `BeginInvoke` to a window handle that did
+not exist yet, so a prompt delivered during start-up threw and never appeared. The anchor's
+handle is forced before the channel is started.
+
+Verified on the installed build: one `connected`, one `ready`, and zero timeouts across
+three minutes of monitoring - where the previous build produced a timeout every 45 seconds.
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed
