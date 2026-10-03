@@ -11,7 +11,7 @@ SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.0-x64.exe  5EBF393B4F9EC909E92BBA318365943C
-ESI-RemotePC-1.0.0.apk             52F7DAC90BF46B8D3E3974F158D48F0
+ESI-RemotePC-1.0.0.apk             DC252F8FE4D74E502EAACA82E158D80D
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -25,7 +25,7 @@ interesting if you know what was given up.
 1. Run `ESI-RemotePC-Setup-1.0.0-x64.exe`. It asks for administrator rights through UAC.
 2. Accept the firewall rule, or add it yourself.
 3. Open `https://localhost:48220/pairing` on the PC.
-4. Pair a phone, then point the app at the phone.
+4. Pair a phone, then point the app at the PC.
 
 **What the installer does.** Lays a self-contained .NET application into
 `%ProgramFiles%\ESI Remote PC`, registers the `ESIRemotePcAgent` service as LocalSystem with
@@ -131,7 +131,7 @@ Worth reading before you trust this on a real machine.
 
 **Verified by running it.** The Windows build is green end to end: 171 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
-that was repeated from the delivered installer file. The Android side is 146 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 152 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
@@ -299,6 +299,38 @@ handle is forced before the channel is started.
 
 Verified on the installed build: one `connected`, one `ready`, and zero timeouts across
 three minutes of monitoring - where the previous build produced a timeout every 45 seconds.
+
+**A fifth, found by launching Notepad from the phone: every command that carries a body was
+failing, and only GETs ever looked right.** `EsiApi._perform` wrote `Content-Type` inside an
+`else if` on the *unsigned* branch - so it was attached to pairing (which is unsigned, §3) and
+to nothing else. Every signed `POST` or `PUT` went out with a body and no media type, and
+ASP.NET cannot bind a body it cannot identify: it answers **415** from the body binder, before
+the endpoint's code runs at all.
+
+The blast radius was every write in the product: launching and terminating apps, **all six
+power actions**, Wake-on-LAN relay, file create/move/rename, uploads, gaming mode, the media
+keys, notification rules, saving settings and rotating the key. All of them returned 415. They
+were invisible because the reads - handshake, system info, metrics, power status, the app list,
+the live WebSocket stream - are all `GET`, and every one of them worked perfectly. The phone
+showed a healthy PC that could not be told to do anything.
+
+It surfaced as `POST /api/v1/apps/launch -> 415` in the agent's log the moment the Apps tab
+was actually used. The header now goes out whenever a body does, signed or not; it is not part
+of what is signed, so the signatures are unchanged, and one of the new tests asserts exactly
+that. Six tests were added to `signed_request_test.dart`, the file that already exists for
+"wiring that no formula test can see". Run against the previous code, three of them fail
+(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 152 pass.
+
+**Re-verified end to end on the delivered APK**, against the installed service:
+
+| | |
+|---|---|
+| Fresh pairing, app data cleared: discovery → six-digit code → `pair approve` → `POST /pair/request → 201` → credentials → **dashboard Live** | device `7793a787a914d2f9`, key 1 |
+| `POST /apps/launch → 200` | Notepad went from 0 to 2 processes on the PC |
+| `POST /apps/notepad/terminate → 200` | back to 0, after the app's own confirmation dialog |
+| `POST /power/wake → 200` | a power endpoint with a signed body - the case that was 415 |
+| `GET /power/status → 200`, machine `online`, `E-K\META PC`, 290 processes, 4069 threads | live telemetry, not cached |
+| 415s after the fix | **zero** (the single one in the log is the pre-fix run that found it) |
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed

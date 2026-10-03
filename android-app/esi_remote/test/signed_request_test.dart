@@ -152,6 +152,93 @@ void main() {
       expect(request.headers.containsKey(EsiProtocol.headerDeviceId), isFalse);
     });
 
+    // Content-Type was written only on the unsigned branch, so every signed request with a
+    // body went out media-type-less and the agent answered 415 before the endpoint ran.
+    // Nothing here is about the signature - the point is that the header exists at all.
+    group('a signed request with a body declares its media type', () {
+      test('POST /apps/launch carries application/json', () async {
+        final transport = _RecordingClient();
+        final api = _api(transport);
+
+        await api.postJson('/apps/launch', body: <String, dynamic>{'id': 'notepad'});
+
+        final request = transport.sent.single;
+        expect(
+          request.headers['Content-Type'],
+          'application/json; charset=utf-8',
+          reason: 'the agent cannot bind a body it cannot identify; without this it '
+              'answers 415 and the endpoint never runs',
+        );
+      });
+
+      test('and is still signed correctly with the header present', () async {
+        final transport = _RecordingClient();
+        final api = _api(transport);
+
+        await api.postJson('/power/shutdown', body: <String, dynamic>{'force': false});
+
+        final request = transport.sent.single;
+        expect(request.headers[EsiProtocol.headerSignature], _signatureOf(request, identity),
+            reason: 'the media type is not covered by the signature, so adding it must not '
+                'change what the agent computes');
+      });
+
+      test('a PUT body is declared too', () async {
+        final transport = _RecordingClient();
+        final api = _api(transport);
+
+        await api.putJson('/settings', body: <String, dynamic>{'theme': 'dark'});
+
+        expect(
+          transport.sent.single.headers['Content-Type'],
+          'application/json; charset=utf-8',
+        );
+      });
+
+      test('an unsigned POST with a body keeps the header pairing relies on', () async {
+        final transport = _RecordingClient();
+        final api = _api(transport);
+
+        await api.postJson('/pair/request', body: <String, dynamic>{'name': 'phone'},
+            signed: false);
+
+        expect(
+          transport.sent.single.headers['Content-Type'],
+          'application/json; charset=utf-8',
+        );
+      });
+
+      test('a raw body carries the content type it was given', () async {
+        final transport = _RecordingClient();
+        final api = _api(transport);
+
+        await api.sendRaw(
+          method: 'POST',
+          path: '/files/upload',
+          body: Uint8List.fromList(<int>[1, 2, 3]),
+          contentType: 'application/octet-stream',
+        );
+
+        expect(
+          transport.sent.single.headers['Content-Type'],
+          'application/octet-stream',
+        );
+      });
+
+      test('a bodyless request declares nothing', () async {
+        final transport = _RecordingClient();
+        final api = _api(transport);
+
+        await api.getJson('/system/info');
+
+        expect(
+          transport.sent.single.headers.containsKey('Content-Type'),
+          isFalse,
+          reason: 'there is no body, so there is no media type to advertise',
+        );
+      });
+    });
+
     test('the signed identity headers match the identity in use', () async {
       final transport = _RecordingClient();
       final api = _api(transport);

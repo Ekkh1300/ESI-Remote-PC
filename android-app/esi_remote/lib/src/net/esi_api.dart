@@ -341,6 +341,23 @@ class EsiApi {
   }) async {
     final uri = endpoint.apiUri(path, rawQuery);
     final headers = <String, String>{};
+
+    // The media type is declared whenever a body goes out, signed or not. It is not part
+    // of what is signed - the agent covers method, target, timestamp, nonce, content hash
+    // and identity, never Content-Type - so writing it first cannot invalidate a signature.
+    //
+    // It used to be written only on the unsigned branch, below the `if (signed)`. Every
+    // signed request carrying a body therefore went out with no Content-Type at all, and
+    // ASP.NET cannot bind a body it cannot identify: it answers 415 before the endpoint
+    // runs. Launching an app, every power action, file writes, uploads, gaming mode, media
+    // keys, settings saves and key rotation all failed as a media-type error while every
+    // GET kept looking perfectly healthy - which is exactly why it hid.
+    //
+    // A bodyless request stays bare: there is no media type to declare.
+    if (contentType != null && body != null && body.isNotEmpty) {
+      headers['Content-Type'] = contentType;
+    }
+
     if (signed) {
       // Signed over `uri.path` and `uri.query`, not over the `path` argument.
       //
@@ -357,8 +374,6 @@ class EsiApi {
         rawQuery: uri.query,
         body: body,
       ));
-    } else if (contentType != null) {
-      headers['Content-Type'] = contentType;
     }
 
     final request = http.Request(method, uri)
