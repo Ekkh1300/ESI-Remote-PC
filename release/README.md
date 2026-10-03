@@ -11,7 +11,7 @@ SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.0-x64.exe  5EBF393B4F9EC909E92BBA318365943C
-ESI-RemotePC-1.0.0.apk             131E9E01E4E69B7C4BDA9BDD188FA7ED
+ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA507
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -131,7 +131,7 @@ Worth reading before you trust this on a real machine.
 
 **Verified by running it.** The Windows build is green end to end: 171 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
-that was repeated from the delivered installer file. The Android side is 153 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 158 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
@@ -319,7 +319,7 @@ was actually used. The header now goes out whenever a body does, signed or not; 
 of what is signed, so the signatures are unchanged, and one of the new tests asserts exactly
 that. Six tests were added to `signed_request_test.dart`, the file that already exists for
 "wiring that no formula test can see". Run against the previous code, three of them fail
-(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 153 pass.
+(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 158 pass.
 
 **A sixth, found by cancelling a pairing instead of completing one: the form never came back
 to life.** `_start` awaits the future `context.push('/pairing')` returns, and that future's
@@ -337,11 +337,39 @@ the previous code it fails with `Expected: not null / Actual: <null>` for `Pair`
 device, Cancel → Stop → Back hands the form back with both buttons enabled and the address
 and 44-character pin untouched.
 
+**A seventh, found on a real phone against a real PC: the pairing window was ten seconds
+long.** The phone created an attempt, the PC showed its prompt with the code, and the phone
+then failed with *"The pairing window closed before it was approved"* — four times, always
+after 8.2 seconds, always nine polls. Nothing in the log looked wrong: `POST /pair/request →
+201`, then a poll a second, then silence, then a fresh attempt thirty seconds later.
+
+The window is the agent's `pairingWindowSeconds` counted from the moment it created the
+attempt, and the attempt is stamped with `expiresAt` in the **agent's** clock. The phone read
+that stamp against **its own** clock. The PC that prompted this had a Windows Time service
+that had never started, and NTP (UDP 123) is blocked on its network, so its clock ran 110 s
+behind real time. That put the end of the stamp only ~10 s into the phone's future, and
+`.clamp(10, 900)` handed the whole 120 second window to its 10 second floor: the phone gave
+up while the agent was still holding the attempt open, waiting for somebody to click
+Approve. The Android emulator paired happily throughout, because an emulator's clock is
+slaved to the host's and so was wrong by the same 110 s — which is why nothing in the test
+suite had ever caught it.
+
+Both halves are fixed. The PC's clock is now correct, and `w32tm` cannot put it back the way
+it found it, because NTP is blocked on that network. And the phone no longer subtracts one
+machine's clock from another's: it reads `serverTime` from the agent's handshake and maps
+`expiresAt` through that offset onto its own clock, which turns the window into a *duration*
+instead of a difference between two clocks, so no offset in either can shorten it. The
+countdown on the pairing screen reads from the same number, so it stops lying too. Five tests
+assert the property for lags of 0 to 600 s in both directions, and record what the old rule
+computed on that PC: `clamp(10, 900)` → `10`.
+
 **Re-verified end to end on the delivered APK**, against the installed service:
 
 | | |
 |---|---|
-| Fresh pairing from a cleared app: discovery → six-digit code → QR secret pasted → `esirc pair approve` → `POST /pair/request → 201` → credentials → **dashboard Live** | device `e6eacb2e283c20c3`, key 1 |
+| Fresh pairing from a cleared app: discovery → six-digit code → QR secret pasted → `esirc pair approve` → `POST /pair/request → 201` → credentials → **dashboard Live** | device `fe6343821655eac1`, key 1 |
+| **The same run with the phone's clock set 109 s ahead of the PC's** — the failure above, reproduced on purpose | countdown `85s` → `67s`, a full window; **Paired** as `bca92023c70adb41`, dashboard Live at 264 processes |
+| Cold start after a force-stop: the stored PC comes back as `10.0.2.2:48220 — paired — key 1`, `Open` → `GET /handshake 200` → `whoami 200` → **dashboard Live** | sampled 20:53:48, 263 processes |
 | The live stream actually moved: sampled 18:42:16 → 18:42:29, CPU 75 % → 78 %, 271–273 processes, 4754–4814 threads | a frame a second over the WebSocket, not a cached reading |
 | `GET /power/status → 200`, machine `online`, `E-K\META PC`, signed in `yes`, last boot 7 h ago | the Power tab |
 | `GET /apps/list` renders the catalog with launch and close actions | the Apps tab |
@@ -351,8 +379,8 @@ and 44-character pin untouched.
 
 Also on this same agent binary, from the previous APK rebuild: `POST /power/wake → 200` and
 `POST /apps/notepad/terminate → 200` (Notepad 0 → 2 → 0). The installer is unchanged from the
-hash at the top of this file, so the agent behind all of it is byte-identical; the two fixes
-since are navigation-only, in Dart.
+hash at the top of this file, so the agent behind all of it is byte-identical; the three fixes
+since are in Dart — two navigation, one the pairing window described above.
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed

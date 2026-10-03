@@ -145,6 +145,21 @@ class PairingService {
     Future<bool> Function()? confirm,
     void Function()? onTick,
   }) async {
+    // The agent stamps `expiresAt` with its own clock, so before asking for an attempt,
+    // read its handshake for `serverTime` and measure how far that clock runs from ours.
+    // That offset is what turns the agent's stamp into an instant this phone can act on.
+    // Without it the pairing window becomes a function of the two machines agreeing, and on
+    // a PC whose clock ran 110 s slow that function answered 10 seconds for a 120 second
+    // window (D33). Best effort: if the handshake cannot be read we fall back to reading
+    // `expiresAt` against our own clock, which is correct exactly when the clocks already
+    // agree — this app's behaviour before the skew was measured.
+    final handshake = await readHandshake(endpoint);
+    // Measured on receipt rather than on send, which makes the offset an underestimate by
+    // the response's travel time; a slightly late deadline is the safe side of the race.
+    final agentSkew = handshake == null
+        ? null
+        : handshake.serverTime - (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+
     PairRequestResult created;
 
     try {
@@ -164,11 +179,25 @@ class PairingService {
       return progress;
     }
 
+    // When the agent will close this attempt, expressed in this phone's clock.
+    final closesAtEpoch = closesAt(created.expiresAt, agentSkew);
+
+    // Only a watchdog: when the attempt really closes is the agent's call — it stops at its
+    // own `expiresAt` and answers `expired`, which the loop below treats as final. It used
+    // to be `now > expiresAt` read straight off the agent's stamp, and `.clamp(10, 900)`
+    // turned a 110 s disagreement between the two machines into a 10 second window: the
+    // phone reported "The pairing window closed before it was approved" while the agent was
+    // still holding the attempt open, waiting for someone to click Approve (D33). The margin
+    // keeps it out of the race between the agent closing and our next poll noticing.
+    final deadline = DateTime.fromMillisecondsSinceEpoch(
+      deadlineEpoch(created.expiresAt, agentSkew) * 1000,
+    );
+
     var progress = PairingProgress(
       phase: PairingPhase.awaitingApproval,
       pairingId: created.pairingId,
       userCode: created.userCode,
-      expiresAt: created.expiresAt,
+      expiresAt: closesAtEpoch,
       approvalMethod: created.approval,
       deviceName: deviceName,
       approval: PairingProgressApproval.inProgress,
@@ -180,13 +209,10 @@ class PairingService {
     );
     onProgress(progress);
 
-    // The agent asks for one poll per second and closes the attempt after
-    // `pairingWindowSeconds` (120 s by default).
+    // The agent asks for one poll per second and holds the attempt until [closesAtEpoch].
     final interval = Duration(
       milliseconds: created.pollIntervalMs.clamp(250, 5000),
     );
-    final deadline = DateTime.now()
-        .add(Duration(seconds: (created.expiresAt - _nowSeconds()).clamp(10, 900)));
 
     while (true) {
       await Future<void>.delayed(interval);
@@ -196,7 +222,7 @@ class PairingService {
           phase: PairingPhase.failed,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           deviceName: deviceName,
           error: 'The pairing window closed before it was approved. Start again to get a '
               'new code.',
@@ -215,7 +241,7 @@ class PairingService {
           phase: PairingPhase.awaitingApproval,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           approvalMethod: created.approval,
           deviceName: deviceName,
           message: 'Lost contact with the PC (${e.displayMessage}). Retrying…',
@@ -227,7 +253,7 @@ class PairingService {
           phase: PairingPhase.awaitingApproval,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           approvalMethod: created.approval,
           deviceName: deviceName,
           message: 'Lost contact with the PC (${e.message}). Retrying…',
@@ -242,7 +268,7 @@ class PairingService {
             phase: PairingPhase.cancelled,
             pairingId: created.pairingId,
             userCode: created.userCode,
-            expiresAt: created.expiresAt,
+            expiresAt: closesAtEpoch,
             deviceName: deviceName,
             error: 'Pairing was cancelled on the phone. The code ${created.userCode} is '
                 'still waiting on the PC and expires on its own.',
@@ -258,7 +284,7 @@ class PairingService {
           phase: PairingPhase.failed,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           deviceName: deviceName,
           error: 'The request was denied on the PC. Nothing was changed.',
         );
@@ -271,7 +297,7 @@ class PairingService {
           phase: PairingPhase.failed,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           deviceName: deviceName,
           error: 'The pairing code expired before it was approved.',
         );
@@ -284,7 +310,7 @@ class PairingService {
           phase: PairingPhase.failed,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           deviceName: deviceName,
           error: 'These secrets were already collected by another device, so this pairing '
               'cannot be completed. Remove the pending request on the PC and start again.',
@@ -303,7 +329,7 @@ class PairingService {
           phase: PairingPhase.awaitingApproval,
           pairingId: created.pairingId,
           userCode: created.userCode,
-          expiresAt: created.expiresAt,
+          expiresAt: closesAtEpoch,
           approvalMethod: created.approval,
           deviceName: deviceName,
           message: 'Approved on the PC, which is now holding the credentials until this '
@@ -426,7 +452,25 @@ class PairingService {
     return PairStatus.fromJson(json);
   }
 
-  static int _nowSeconds() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  /// Seconds of margin before this phone stops asking, so the watchdog cannot land in
+  /// between the agent closing the attempt and our next poll hearing that it did.
+  static const int _deadlineGraceSeconds = 30;
+
+  /// The agent's `expiresAt` expressed in this phone's clock — the whole rule, in one
+  /// place, so it can be tested without needing two clocks in the room.
+  ///
+  /// [agentSkew] is `serverTime - now` measured from the agent's handshake: positive when
+  /// the agent's clock runs ahead of this phone's, negative when it lags. `null` means the
+  /// skew could not be measured and the stamp is taken at face value, which is correct only
+  /// when the two clocks already agree.
+  static int closesAt(int expiresAt, int? agentSkew) =>
+      agentSkew == null ? expiresAt : expiresAt - agentSkew;
+
+  /// When this phone stops asking: when the agent will close the attempt, plus the
+  /// [_deadlineGraceSeconds] margin that keeps the watchdog out of the race between the
+  /// agent closing the attempt and our next poll hearing that it did.
+  static int deadlineEpoch(int expiresAt, int? agentSkew) =>
+      closesAt(expiresAt, agentSkew) + _deadlineGraceSeconds;
 
   static String _hostOf(EsiEndpoint endpoint) => endpoint.displayAddress;
 
