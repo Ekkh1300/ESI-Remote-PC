@@ -9,8 +9,10 @@ library;
 import 'package:esi_remote/src/data/machine_store.dart';
 import 'package:esi_remote/src/protocol/models.dart';
 import 'package:esi_remote/src/net/discovery.dart';
+import 'package:esi_remote/src/data/pairing_service.dart';
 import 'package:esi_remote/src/state/connection.dart';
 import 'package:esi_remote/src/state/discovery.dart';
+import 'package:esi_remote/src/state/pairing_flow.dart';
 import 'package:esi_remote/src/ui/format.dart';
 import 'package:esi_remote/src/ui/router.dart';
 import 'package:esi_remote/src/ui/theme.dart';
@@ -27,6 +29,28 @@ Widget _host(Widget child) => MaterialApp(
       theme: buildEsiTheme(),
       home: Scaffold(body: child),
     );
+
+/// Opens an attempt and then fails it, without touching a socket.
+///
+/// Overridden so the test owns the outcome instead of waiting on a real agent: what is under
+/// test is the form's behaviour when the attempt is over, not the handshake itself.
+class _FailingPairingFlow extends PairingFlowNotifier {
+  @override
+  Future<void> start(PairingRequest request) async {
+    state = PairingFlowState(
+      request: request,
+      progress: const PairingProgress(phase: PairingPhase.requesting),
+      startedAt: DateTime.now(),
+    );
+    state = state.copyWith(
+      progress: const PairingProgress(
+        phase: PairingPhase.failed,
+        error: 'Nothing answered at that address.',
+      ),
+      finished: true,
+    );
+  }
+}
 
 void main() {
   group('formatting an unreported value', () {
@@ -396,6 +420,86 @@ void main() {
       expect(find.text('Paste'), findsOneWidget);
       // The copy has to be honest about *why* the QR is the good path.
       expect(find.textContaining('one-time secret'), findsWidgets);
+    });
+
+    testWidgets('a failed attempt hands the form back with both buttons live',
+        (tester) async {
+      // `_start` on the form awaits the future `context.push('/pairing')` returned, and only
+      // that future's `finally` clears the `_busy` that greys these buttons out. Leaving the
+      // attempt with `context.go` replaced the stack instead of popping, so the future was
+      // abandoned and the form came back dead until the app was restarted. This drives the
+      // real path - fill, Pair, fail, Start again - and asks for the buttons afterwards.
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            machineStoreProvider.overrideWithValue(
+              MachineStore.inMemory(<String, String>{}),
+            ),
+            discoveryRunnerProvider.overrideWithValue(
+              ({onProgress}) async => const DiscoveryResult(
+                [],
+                methods: <DiscoveryMethod>{},
+                notes: <String>[],
+              ),
+            ),
+            pairingFlowProvider.overrideWith(_FailingPairingFlow.new),
+          ],
+          child: const EsiRemoteApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      Finder byLabel(String label) => find.byWidgetPredicate(
+            (w) => w is TextField && w.decoration?.labelText == label,
+          );
+
+      // The form sits below the fold, so it is scrolled to rather than assumed built.
+      for (var i = 0; i < 12 && byLabel('Certificate pin').evaluate().isEmpty; i++) {
+        await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(byLabel('Certificate pin'), findsOneWidget);
+
+      await tester.enterText(byLabel('Address'), '192.168.1.50');
+      await tester.pump();
+      await tester.enterText(byLabel('Certificate pin'), 'aGVsbG8gd29ybGQ');
+      await tester.pump();
+
+      expect(
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pair')).onPressed,
+        isNotNull,
+        reason: 'a filled-in form offers Pair',
+      );
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Pair'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('Start pairing'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // The attempt failed and says so.
+      expect(find.text('Start again'), findsOneWidget);
+
+      await tester.tap(find.text('Start again'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Add a PC by hand'), findsOneWidget);
+      expect(
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Pair')).onPressed,
+        isNotNull,
+        reason: 'Pair must be live again: the attempt is over, so _busy has to be cleared',
+      );
+      expect(
+        tester.widget<OutlinedButton>(
+          find.widgetWithText(OutlinedButton, 'Check address'),
+        ).onPressed,
+        isNotNull,
+        reason: 'Check address is gated on _busy alone, so it is the readout of that flag',
+      );
     });
   });
 

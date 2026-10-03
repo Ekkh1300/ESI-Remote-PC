@@ -11,7 +11,7 @@ SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.0-x64.exe  5EBF393B4F9EC909E92BBA318365943C
-ESI-RemotePC-1.0.0.apk             DC252F8FE4D74E502EAACA82E158D80D
+ESI-RemotePC-1.0.0.apk             131E9E01E4E69B7C4BDA9BDD188FA7ED
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -131,7 +131,7 @@ Worth reading before you trust this on a real machine.
 
 **Verified by running it.** The Windows build is green end to end: 171 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
-that was repeated from the delivered installer file. The Android side is 152 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 153 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
@@ -319,18 +319,40 @@ was actually used. The header now goes out whenever a body does, signed or not; 
 of what is signed, so the signatures are unchanged, and one of the new tests asserts exactly
 that. Six tests were added to `signed_request_test.dart`, the file that already exists for
 "wiring that no formula test can see". Run against the previous code, three of them fail
-(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 152 pass.
+(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 153 pass.
+
+**A sixth, found by cancelling a pairing instead of completing one: the form never came back
+to life.** `_start` awaits the future `context.push('/pairing')` returns, and that future's
+`finally` is the only thing that clears the `_busy` which greys out `Check address` and
+`Pair`. The pairing screen left its route with `context.go('/onboarding')` — from *Start
+again* and from the empty state's *Back* — and `go` replaces the whole stack instead of
+popping it. go_router completes a pushed route's future only from `_completeRouteMatch`,
+which runs on a pop, so the `go` abandoned the await: `finally` never ran, and because
+`/onboarding` is the base route its `State` is *reused* rather than recreated, so the form
+came back still `_busy` with both buttons dead until the app was restarted. Both exits pop
+now; `go` survives only for arriving at the pairing screen without having been pushed, where
+there is nothing to pop. The new widget test drives the real path — fill the form, *Pair*,
+let the attempt fail, *Start again* — and asserts both buttons are live again; run against
+the previous code it fails with `Expected: not null / Actual: <null>` for `Pair`. On the
+device, Cancel → Stop → Back hands the form back with both buttons enabled and the address
+and 44-character pin untouched.
 
 **Re-verified end to end on the delivered APK**, against the installed service:
 
 | | |
 |---|---|
-| Fresh pairing, app data cleared: discovery → six-digit code → `pair approve` → `POST /pair/request → 201` → credentials → **dashboard Live** | device `7793a787a914d2f9`, key 1 |
-| `POST /apps/launch → 200` | Notepad went from 0 to 2 processes on the PC |
-| `POST /apps/notepad/terminate → 200` | back to 0, after the app's own confirmation dialog |
-| `POST /power/wake → 200` | a power endpoint with a signed body - the case that was 415 |
-| `GET /power/status → 200`, machine `online`, `E-K\META PC`, 290 processes, 4069 threads | live telemetry, not cached |
-| 415s after the fix | **zero** (the single one in the log is the pre-fix run that found it) |
+| Fresh pairing from a cleared app: discovery → six-digit code → QR secret pasted → `esirc pair approve` → `POST /pair/request → 201` → credentials → **dashboard Live** | device `e6eacb2e283c20c3`, key 1 |
+| The live stream actually moved: sampled 18:42:16 → 18:42:29, CPU 75 % → 78 %, 271–273 processes, 4754–4814 threads | a frame a second over the WebSocket, not a cached reading |
+| `GET /power/status → 200`, machine `online`, `E-K\META PC`, signed in `yes`, last boot 7 h ago | the Power tab |
+| `GET /apps/list` renders the catalog with launch and close actions | the Apps tab |
+| `POST /apps/launch → 200` and `POST /apps/edge/terminate → 200` (15 processes) | signed requests **with a body** — the case that used to be 415 |
+| Cancel → Stop → Back after a live attempt: `Check address` and `Pair` both re-enabled, address and 44-character pin intact | D32 above |
+| 415 responses since `Content-Type` was fixed | **zero** - the single 415 in today's log is the 12:31 run that found D31 |
+
+Also on this same agent binary, from the previous APK rebuild: `POST /power/wake → 200` and
+`POST /apps/notepad/terminate → 200` (Notepad 0 → 2 → 0). The installer is unchanged from the
+hash at the top of this file, so the agent behind all of it is byte-identical; the two fixes
+since are navigation-only, in Dart.
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed

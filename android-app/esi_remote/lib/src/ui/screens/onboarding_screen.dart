@@ -27,8 +27,8 @@ import '../widgets/states.dart';
 ///
 /// Three routes in, because three things actually happen in the real world: the PC is on
 /// the same network and answers a search, the user knows its address, or the PC is showing
-/// a QR code on its screen. Each one ends in the same place â€” a confirmed endpoint with a
-/// pin â€” and only then can pairing start.
+/// a QR code on its screen. Each one ends in the same place — a confirmed endpoint with a
+/// pin — and only then can pairing start.
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -137,12 +137,37 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   /// Fills the manual form from a discovered agent. Everything except the pin, which
-  /// discovery is not allowed to supply â€” see _DiscoveryPanel.onUse.
-  void _adopt(String host, int port) {
+  /// discovery is not allowed to supply — see _DiscoveryPanel.onUse.
+  ///
+  /// What gets said afterwards depends on whether the field already holds one. This used to
+  /// be announced unconditionally from the discovered row, which told the user the pin had
+  /// been left empty even when they had just typed it; read while pairing, that sentence
+  /// stops looking like information and starts looking like the reason nothing worked.
+  void _adopt(String host, int port, String pinEnds) {
+    final alreadyTyped = _pin.text.trim().isNotEmpty;
     setState(() {
       _host.text = host;
       _port.text = '$port';
     });
+
+    final message = alreadyTyped
+        ? 'Address filled in from discovery. The pin you typed was left as it is. Check '
+            'the ends still match this PC before pairing: $pinEnds.'
+        : 'Address filled in from discovery. The pin is left empty on purpose: PROTOCOL.md '
+            '§2.1 treats a value from the wire as untrusted, and it is the one field that '
+            'decides whether this really is your PC. Type the full pin from the PC\'s '
+            'pairing screen, or scan its QR code - it carries the whole thing. Only its '
+            'first and last characters appear here, to check what you typed against: '
+            '$pinEnds.';
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 12),
+        ),
+      );
   }
 
   Future<void> _probe() async {
@@ -152,7 +177,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (handshake == null) return;
-    // Show what the PC claims, but never fill the pin field from it: PROTOCOL.md Â§2.1 says
+    // Show what the PC claims, but never fill the pin field from it: PROTOCOL.md §2.1 says
     // this value could have been written by anything on the wire.
     await showDialog<void>(
       context: context,
@@ -166,7 +191,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (host.isEmpty || pin.isEmpty) {
       _warn(
         'Pairing needs the address and the certificate pin. The pairing secret is not '
-        'something you find first â€” the PC creates it when it receives this request and '
+        'something you find first — the PC creates it when it receives this request and '
         'hands it to you on the QR shown while you wait.',
       );
       return;
@@ -276,7 +301,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ? 'The QR code did not include ${missing.join(' or ')}. Fill in the rest below.'
           : payload.hasSecret
               ? 'Address, port and pin read from the QR code. Its pairing secret belongs to '
-                  'an attempt that is no longer running, so it is not used here â€” scan this '
+                  'an attempt that is no longer running, so it is not used here — scan this '
                   'QR again while you wait, on the next screen, to collect the credentials.'
               : 'Read from the QR code. Check the address and pin against the PC, then '
                   'pair. The one-time secret comes back from the PC while you wait.';
@@ -332,11 +357,13 @@ class _DiscoveryPanel extends ConsumerWidget {
 
   /// Copies a discovered address into the manual form below.
   ///
-  /// The pin is deliberately not part of this. PROTOCOL.md Â§2.1 says the value in a
+  /// The pin value is deliberately not part of this. PROTOCOL.md §2.1 says the value in a
   /// discovery answer could have been written by anything on the wire, and the pin is the
   /// one field whose whole job is to decide whether you are talking to the right PC. The
   /// address is not a secret and is what the user would otherwise retype, so it is filled.
-  final void Function(String host, int port) onUse;
+  /// [pinEnds] is only the head and tail of that pin, passed along purely so the parent can
+  /// show what to check a manually typed pin against.
+  final void Function(String host, int port, String pinEnds) onUse;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -368,7 +395,7 @@ class _DiscoveryPanel extends ConsumerWidget {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                   SizedBox(width: EsiSpace.md),
-                  Expanded(child: Text('Searchingâ€¦', style: EsiType.body)),
+                  Expanded(child: Text('Searching…', style: EsiType.body)),
                 ],
               ),
             )
@@ -428,7 +455,7 @@ class _DiscoveredAgentRow extends ConsumerWidget {
   const _DiscoveredAgentRow({required this.agent, required this.onUse});
 
   final DiscoveredAgent agent;
-  final void Function(String host, int port) onUse;
+  final void Function(String host, int port, String pinEnds) onUse;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -468,8 +495,8 @@ class _DiscoveredAgentRow extends ConsumerWidget {
               agent.host.isEmpty
                   ? 'Answered a broadcast, but its address could not be determined. Add '
                       'it by hand.'
-                  : 'agent ${agent.handshake.agentVersion} Â· '
-                      'protocol v${agent.handshake.protocolVersion} Â· '
+                  : 'agent ${agent.handshake.agentVersion} · '
+                      'protocol v${agent.handshake.protocolVersion} · '
                       '${agent.methods.length} method'
                       '${agent.methods.length == 1 ? '' : 's'}',
               style: EsiType.mono.copyWith(fontSize: 10.5),
@@ -501,25 +528,15 @@ class _DiscoveredAgentRow extends ConsumerWidget {
     await ref.read(discoveryProvider.notifier).probe(agent.host, agent.port);
     if (!context.mounted) return;
 
-    // Take the messenger before touching the parent: filling the form rebuilds the tree
-    // this row lives in, and the context would no longer be usable afterwards.
-    final messenger = ScaffoldMessenger.of(context);
-
-    onUse(agent.host, agent.port);
-
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            'Address filled in from discovery. The pin is not â€” PROTOCOL.md Â§2.1 treats a '
-            'value from the wire as untrusted, and it is the one field that decides whether '
-            'this really is your PC. Take it from the PC\'s pairing screen, or scan its QR '
-            'code, which carries it for you: ${formatBytesBase64(agent.spkiPin, head: 10, tail: 6)}.',
-          ),
-          duration: const Duration(seconds: 9),
-        ),
-      );
+    // The explanation is said by the parent, not here. Filling the form rebuilds the tree
+    // this row lives in, so this context cannot be used for a snackbar afterwards - and the
+    // parent owns the pin field, making it the only place that can tell whether one has
+    // already been typed, which decides which of the two things actually needs saying.
+    onUse(
+      agent.host,
+      agent.port,
+      formatBytesBase64(agent.spkiPin, head: 10, tail: 6),
+    );
   }
 }
 
@@ -607,7 +624,7 @@ class _ManualPanel extends StatelessWidget {
               style: EsiType.mono.copyWith(color: EsiPalette.ink, fontSize: 12),
               decoration: const InputDecoration(
                 labelText: 'MAC address (optional)',
-                hintText: 'AA:BB:CC:DD:EE:FF â€” used to wake the PC',
+                hintText: 'AA:BB:CC:DD:EE:FF — used to wake the PC',
               ),
             ),
             const SizedBox(height: EsiSpace.lg),
@@ -779,7 +796,7 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
                     padding: const EdgeInsets.all(EsiSpace.lg),
                     child: Text(
                       'The code is on the pairing page in the PC\'s browser. A phone camera '
-                      'cannot read a screen that is asleep â€” wake it first.',
+                      'cannot read a screen that is asleep — wake it first.',
                       textAlign: TextAlign.center,
                       style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
                     ),
@@ -910,8 +927,8 @@ class _PairedMachines extends ConsumerWidget {
                       children: <Widget>[
                         Text(machine.displayName, style: EsiType.subtitle.copyWith(fontSize: 14)),
                         Text(
-                          '${machine.displayAddress} Â· '
-                          '${machine.isPaired ? 'paired' : 'not paired'} Â· key ${machine.keyId}',
+                          '${machine.displayAddress} · '
+                          '${machine.isPaired ? 'paired' : 'not paired'} · key ${machine.keyId}',
                           style: EsiType.mono.copyWith(fontSize: 10.5),
                         ),
                       ],
@@ -1014,6 +1031,24 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
     });
   }
 
+  /// Leaves this screen by popping it, which is how it was arrived at.
+  ///
+  /// The form underneath is awaiting the future `context.push('/pairing')` handed back, and
+  /// that future's `finally` is the only thing that clears the `_busy` greying out 'Check
+  /// address' and 'Pair'. `context.go` replaces the whole stack instead of popping, and
+  /// go_router completes a pushed route's future only from `_completeRouteMatch`, which runs
+  /// on a pop — so `go` abandoned the await and the form came back still `_busy`, with both
+  /// buttons dead until the app was restarted. Popping resolves it, which is also what this
+  /// route deserves: it was pushed, not navigated to. `go` remains for arriving here without
+  /// having been pushed at all, where there is nothing to pop.
+  void _leavePairing(BuildContext context) {
+    if (context.canPop()) {
+      context.pop<void>();
+    } else {
+      context.go('/onboarding');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final flow = ref.watch(pairingFlowProvider);
@@ -1029,7 +1064,7 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
           title: 'Nothing to pair',
           body: 'This screen needs a PC address to work with. Go back and find one.',
           action: FilledButton(
-            onPressed: () => context.go('/onboarding'),
+            onPressed: () => _leavePairing(context),
             child: const Text('Back'),
           ),
         ),
@@ -1093,9 +1128,9 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
         );
       case PairingPhase.cancelled:
       case PairingPhase.failed:
-        return _Failed(progress: progress!, onRetry: () => context.go('/onboarding'));
+        return _Failed(progress: progress!, onRetry: () => _leavePairing(context));
       case null:
-        return const EsiLoading(label: 'Starting the handshakeâ€¦');
+        return const EsiLoading(label: 'Starting the handshake…');
     }
   }
 
@@ -1136,7 +1171,7 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
   /// is already running.
   ///
   /// This deliberately does *not* start a second attempt. The secret is minted per attempt,
-  /// so a fresh request would carry a different one and the unwrap would fail - and Â§5.4 has
+  /// so a fresh request would carry a different one and the unwrap would fail - and §5.4 has
   /// the agent mark the attempt consumed before it tries, so a mismatch burns the code.
   void _adoptSecret(String raw) {
     final result = PairingQr.parse(raw);
@@ -1224,7 +1259,7 @@ class _Waiting extends StatelessWidget {
               children: <Widget>[
                 if (progress.phase != PairingPhase.decrypting) ...<Widget>[
                   Text(
-                    code == null ? 'Asking the PC for a codeâ€¦' : 'Match this code on the PC:',
+                    code == null ? 'Asking the PC for a code…' : 'Match this code on the PC:',
                     style: EsiType.body.copyWith(color: EsiPalette.dim),
                     textAlign: TextAlign.center,
                   ),
@@ -1258,7 +1293,7 @@ class _Waiting extends StatelessWidget {
                 ],
                 // The PC mints the one-time secret while handling the request that started
                 // this attempt, so it could not have been supplied when the attempt began.
-                // The QR on the approval prompt - or on /pairing?code=â€¦ - is where it comes
+                // The QR on the approval prompt - or on /pairing?code=… - is where it comes
                 // back, and until this phone holds it the PC approves but releases nothing.
                 if (!request.hasSecret && progress.phase != PairingPhase.decrypting) ...<Widget>[
                   const SizedBox(height: EsiSpace.lg),
