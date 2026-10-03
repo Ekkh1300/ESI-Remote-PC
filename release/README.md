@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  5EBF393B4F9EC909E92BBA318365943C
+ESI-RemotePC-Setup-1.0.0-x64.exe  B7831D2FBEBF9EEF8D9D70860EDC5F515
 ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA507
 ```
 
@@ -129,7 +129,7 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 171 unit and integration
+**Verified by running it.** The Windows build is green end to end: 174 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
 that was repeated from the delivered installer file. The Android side is 158 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
@@ -363,6 +363,39 @@ countdown on the pairing screen reads from the same number, so it stops lying to
 assert the property for lags of 0 to 600 s in both directions, and record what the old rule
 computed on that PC: `clamp(10, 900)` → `10`.
 
+**An eighth, and the reason the seventh was so hard to find: the Approve button on the PC did
+nothing at all.** The seventh produced a symptom — *"The pairing window closed before it was
+approved"* — that pointed squarely at the clock, and the clock *was* wrong, and fixing it
+changed nothing. This is what was underneath. The phone asked, the PC showed its prompt with
+the code, somebody clicked **Allow this device**, the dialog closed — and the attempt stayed
+pending until it expired, so the phone was told the window had closed. Four attempts, four
+`POST /pair/request → 201`, four runs of a one-second poll, and not one line in the log between
+them: an approval that was never recorded because it was never applied.
+
+Two separate breaks, either of which alone is fatal. **One:** `ShowPairingPromptAsync`
+completed its task with `form.Decision` read *before* `form.ShowDialog()`, and
+`PairingPromptForm.Decision` starts life as `TimedOut` — so the outcome was `expired` before the
+user had been offered a choice, whatever they then pressed. **Two:** the service learned the
+outcome through `SessionAgentBridge.PairingApprovalRequested`, an event that had a declaration
+and exactly one `?.Invoke` and **no subscriber anywhere in the solution**, so a correct report
+would have been discarded even if one had been produced. The event was also shaped like a fresh
+invitation rather than an answer, which is how a routing mistake looked like a naming one.
+
+It survived because no test ever used the path. Every end-to-end run in this project approved
+with `esirc pair approve`, which needs the service stopped and so cannot share a window with a
+live attempt; and the integration fixture drives `PairingManager` directly, under a comment
+asserting that was "the same object the prompt's answer is routed to". That was the assumption
+nothing had checked. It is now a test.
+
+The decision is read after the dialog closes, arrives as a `PairingDecisionReport` carrying a
+`PairingOutcome`, and is applied by `AgentHostedService` — approve, deny, or expire, each with
+its audit entry — with the reach a pairing grants defined once on `PairingManager` so the
+desktop and the CLI cannot drift apart. Three integration tests feed in the exact
+`pairing.result` message the session agent sends and assert the attempt's state and the sealed
+credentials that follow; with the subscription removed, two of the three fail. On the installed
+agent: `pending` → click **Allow this device** → `approved`, `deviceId ef9ad8efc29100d3`,
+`keyId 1`, envelope present, and `Approved Desktop e2e from the desktop prompt` in the log.
+
 **Re-verified end to end on the delivered APK**, against the installed service:
 
 | | |
@@ -375,12 +408,16 @@ computed on that PC: `clamp(10, 900)` → `10`.
 | `GET /apps/list` renders the catalog with launch and close actions | the Apps tab |
 | `POST /apps/launch → 200` and `POST /apps/edge/terminate → 200` (15 processes) | signed requests **with a body** — the case that used to be 415 |
 | Cancel → Stop → Back after a live attempt: `Check address` and `Pair` both re-enabled, address and 44-character pin intact | D32 above |
+| **The on-desktop prompt, clicked for real**: attempt → prompt window → click *Allow this device* → poll `pending` → poll `approved` with `deviceId ef9ad8efc29100d3`, `keyId 1` and a sealed envelope, and `Released the pairing secrets` in the log | D34 above — the path the whole product depends on and which no test had ever exercised |
+| The SPKI pin is unchanged by the rebuild, so the value already on the pairing form is still correct | the certificate lives in `agent.pfx`, not in the binary |
 | 415 responses since `Content-Type` was fixed | **zero** - the single 415 in today's log is the 12:31 run that found D31 |
 
 Also on this same agent binary, from the previous APK rebuild: `POST /power/wake → 200` and
 `POST /apps/notepad/terminate → 200` (Notepad 0 → 2 → 0). The installer is unchanged from the
-hash at the top of this file, so the agent behind all of it is byte-identical; the three fixes
-since are in Dart — two navigation, one the pairing window described above.
+hash at the top of this file. The agent is **not** the same binary it was before D34 — the
+desktop prompt's answer is applied by the service, which it previously never was — so this
+installer carries a real agent change. Before that it was byte-identical, and the three fixes
+before it were in Dart: two navigation, one the pairing window described above.
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed

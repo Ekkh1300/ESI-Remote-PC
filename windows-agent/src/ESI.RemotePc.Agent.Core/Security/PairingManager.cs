@@ -214,6 +214,13 @@ public sealed class PairingManager(
         return result;
     }
 
+    /// <summary>
+    /// The reach a pairing grants. The desktop prompt and <c>esirc pair approve</c> hand a
+    /// phone the same thing, so it is declared once here rather than spelled out at each of
+    /// the two call sites that could otherwise drift apart.
+    /// </summary>
+    public const DeviceScope DefaultScopes = DeviceScope.Read | DeviceScope.Control | DeviceScope.Files;
+
     /// <summary>Approves a pairing attempt, creating the device and its secrets.</summary>
     public (PairedDevice Device, byte[] MasterSecret, int KeyId) Approve(string pairingId, DeviceScope scopes)
     {

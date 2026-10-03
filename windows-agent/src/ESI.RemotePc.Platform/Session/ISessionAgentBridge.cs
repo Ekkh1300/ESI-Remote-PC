@@ -108,6 +108,36 @@ public sealed record PairingPromptRequest(
     int ExpiresInSeconds,
     string PollingUrl);
 
+/// <summary>How the person on the desktop answered a pairing prompt.</summary>
+public enum PairingOutcome
+{
+    /// <summary>Approved; the attempt is now waiting for the phone's one-time secret.</summary>
+    Approved,
+
+    /// <summary>Refused. The phone is told <c>denied</c> on its next poll.</summary>
+    Denied,
+
+    /// <summary>
+    /// Nobody answered before the window closed — the dialog timed out, or it was closed
+    /// without a decision being made by the deadline timer.
+    /// </summary>
+    Expired,
+}
+
+/// <summary>
+/// The service's side of a pairing prompt: what the person on the desktop decided.
+/// <para>
+/// A distinct type from <see cref="PairingPromptRequest"/> because it answers a prompt that
+/// has already been raised. Reusing the request shape invited reading a decision as if it
+/// were another invitation, and nothing was listening anyway (D34).
+/// </para>
+/// </summary>
+public sealed record PairingDecisionReport(
+    string PairingId,
+    string UserCode,
+    string DeviceName,
+    PairingOutcome Outcome);
+
 /// <summary>Incoming messages from the session agent over the reverse channel.</summary>
 public sealed class SessionAgentMessage
 {

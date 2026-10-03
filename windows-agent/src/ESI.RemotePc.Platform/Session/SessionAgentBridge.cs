@@ -71,7 +71,18 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
 
     // Events raised when the session agent reports something interesting.
     public event EventHandler<SessionAgentEvent>? EventReported;
-    public event EventHandler<PairingPromptRequest>? PairingApprovalRequested;
+
+    /// <summary>
+    /// The user answered a pairing prompt that was raised earlier.
+    /// <para>
+    /// This carries the *outcome*, not another invitation, which is why it is a
+    /// <see cref="PairingDecisionReport"/> and not a <see cref="PairingPromptRequest"/>. It
+    /// used to be raised as <c>PairingApprovalRequested</c> and shaped like a request — and
+    /// nothing subscribed to it, so a prompt answered on the desktop was reported to the
+    /// service and then dropped (D34).
+    /// </para>
+    /// </summary>
+    public event EventHandler<PairingDecisionReport>? PairingDecided;
     public event EventHandler<SessionAgentCommandResult>? CommandCompleted;
 
     /// <summary>
@@ -315,7 +326,16 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
         }
     }
 
-    private void HandleMessage(SessionAgentMessage m)
+    /// <summary>
+    /// Dispatches one message from the session agent.
+    /// <para>
+    /// Internal rather than private so a test can feed in a <c>pairing.result</c> and assert the
+    /// agent applies it. The pairing prompt is a WinForms dialog that cannot exist in a test
+    /// process, and driving <c>PairingManager</c> directly - which is what the suite used to do -
+    /// skipped exactly the wiring that was broken (D34).
+    /// </para>
+    /// </summary>
+    internal void HandleMessage(SessionAgentMessage m)
     {
         _lastHeartbeatUtc = DateTime.UtcNow;
 
@@ -355,12 +375,18 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
                 break;
 
             case SessionChannelProtocol.Events.PairingResult:
-                // The user answered a prompt the agent raised earlier, so this is a
-                // notification rather than a new request: the fields carried are the outcome,
-                // not a fresh invitation. There is no URL to publish, hence the empty one.
-                PairingApprovalRequested?.Invoke(this, new PairingPromptRequest(
-                    m.ResponseTo ?? "", m.Name ?? "Unknown device", "android", null, null,
-                    m.Detail ?? "local", m.CorrelationId ?? "", 0, string.Empty));
+                // The user answered a prompt the agent raised earlier, so this is an outcome,
+                // not a fresh invitation: the fields carried are what the human decided.
+                PairingDecided?.Invoke(this, new PairingDecisionReport(
+                    m.ResponseTo ?? "",
+                    m.CorrelationId ?? "",
+                    m.Name ?? "Unknown device",
+                    m.Detail switch
+                    {
+                        "approved" => PairingOutcome.Approved,
+                        "denied" => PairingOutcome.Denied,
+                        _ => PairingOutcome.Expired,
+                    }));
                 break;
 
             case SessionChannelProtocol.Events.CommandResult:

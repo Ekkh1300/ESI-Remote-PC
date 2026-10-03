@@ -390,8 +390,12 @@ internal sealed class SessionAgentRuntime : ApplicationContext
             try
             {
                 using var form = new PairingPromptForm(request);
-                _ = result.TrySetResult(form.Decision);
                 form.ShowDialog();
+                // Read after the dialog has closed, never before. `PairingPromptForm.Decision`
+                // starts life as TimedOut, so completing the task with the value it holds at
+                // this point reported every prompt as expired no matter which button the user
+                // pressed - and Approve was therefore a button that did nothing at all (D34).
+                _ = result.TrySetResult(form.Decision);
                 form.Close();
             }
             catch (Exception ex)

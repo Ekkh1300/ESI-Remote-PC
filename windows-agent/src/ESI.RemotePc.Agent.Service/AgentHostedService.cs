@@ -184,7 +184,61 @@ public sealed class AgentHostedService(
             log.LogError("TLS was requested but the certificate could not be created. " +
                          "Traffic will be plaintext; only request signing protects it.");
 
+        // The desktop prompt is only half the feature: the answer has to come back here and
+        // be applied to the attempt. Nothing was listening for it, so Approve on the PC
+        // closed the dialog and left the attempt pending until it expired (D34).
+        if (sessionAgent is SessionAgentBridge bridge)
+            bridge.PairingDecided += OnPairingDecided;
+
         notifications.RaiseEvent("system", "PC is online", "The ESI Remote PC agent started.");
+    }
+
+    /// <summary>
+    /// Applies the answer a person gave to a pairing prompt on the desktop.
+    /// <para>
+    /// Approved creates the device, exactly as <c>esirc pair approve</c> does, which is what
+    /// lets the phone collect the credentials on its next poll. Denied and expired resolve the
+    /// attempt so the phone is told the truth rather than polling a corpse until its own
+    /// window runs out.
+    /// </para>
+    /// </summary>
+    private void OnPairingDecided(object? sender, PairingDecisionReport report)
+    {
+        if (string.IsNullOrWhiteSpace(report.PairingId))
+        {
+            log.LogWarning("The session agent reported a pairing decision with no attempt id; ignoring it");
+            return;
+        }
+
+        try
+        {
+            switch (report.Outcome)
+            {
+                case PairingOutcome.Approved:
+                    var (device, _, keyId) = pairing.Approve(report.PairingId, PairingManager.DefaultScopes);
+                    audit.Record(AuditLog.ActionPairApproved, "ok", device.DeviceId, device.Name,
+                        null, "approved from the desktop prompt");
+                    log.LogInformation("Approved {Device} from the desktop prompt as {DeviceId}, key {KeyId}",
+                        report.DeviceName, device.DeviceId, keyId);
+                    break;
+
+                case PairingOutcome.Denied:
+                    pairing.Deny(report.PairingId);
+                    audit.Record(AuditLog.ActionPairDenied, "ok", null, report.DeviceName,
+                        null, "denied from the desktop prompt");
+                    break;
+
+                default:
+                    pairing.Expire(report.PairingId);
+                    break;
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The window can close between the click and this arriving, and the CLI may have
+            // resolved the attempt already. Neither is worth taking the service down over.
+            log.LogWarning("The desktop pairing decision could not be applied: {Reason}", ex.Message);
+        }
     }
 
     private async Task RunAsync(CancellationToken ct)

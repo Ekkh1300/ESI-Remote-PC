@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Esi.Core;
+using Esi.Platform.Session;
 using Esi.Protocol;
 using Esi.Service;
 using Microsoft.AspNetCore.Builder;
@@ -242,11 +243,13 @@ public sealed class AgentFixture : IAsyncLifetime
     /// <summary>
     /// Runs the full pairing handshake: ask, approve, and collect the device credentials.
     /// <para>
-    /// Approval normally comes from the on-desktop prompt. The prompt is a WinForms dialog
-    /// owned by the session agent, which cannot exist in a test process, so the
-    /// <c>PairingManager</c> is driven directly - the same object the prompt's answer is
-    /// routed to. Everything either side of that, including the provisioning-key encryption,
-    /// is still exercised.
+    /// Approval normally comes from the on-desktop prompt, which is a WinForms dialog owned by
+    /// the session agent and cannot exist in a test process - so this drives
+    /// <c>PairingManager</c> directly. That is only a shortcut for the *prompt*: the message
+    /// the desktop's answer travels on is covered by
+    /// <see cref="Approving_on_the_desktop_prompt_publishes_the_device_and_the_secrets"/>,
+    /// because before D34 the two were not the same thing at all. Everything either side of
+    /// that, including the provisioning-key encryption, is still exercised here.
     /// </para>
     /// </summary>
     private async Task PairAsync()
@@ -310,6 +313,128 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("\"status\":\"ok\"", body, StringComparison.Ordinal);
+    }
+
+    // ===============================================================================
+    // D34 - the answer a person gives on the desktop has to reach the attempt
+    // ===============================================================================
+
+    /// <summary>
+    /// A person who clicks Approve in the on-desktop prompt must produce a paired device and
+    /// wrapped credentials the phone can collect.
+    /// <para>
+    /// Two things stood between the click and both of those. The session agent completed the
+    /// prompt's task with <c>form.Decision</c> read <i>before</i> <c>ShowDialog()</c>, and that
+    /// property starts at <c>TimedOut</c> - so every prompt reported itself expired no matter
+    /// which button was pressed. Then the service raised the outcome as an event that nothing
+    /// subscribed to, so even a correct report was discarded. The net effect was that Approve
+    /// was a button that did nothing: the attempt sat pending until it expired and the phone was
+    /// told the pairing window had closed before it was approved.
+    /// </para>
+    /// <para>
+    /// Approval in this suite went through the CLI, so no test ever sent the message a desktop
+    /// approval actually travels on. This one does.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Approving_on_the_desktop_prompt_publishes_the_device_and_the_secrets()
+    {
+        var pairing = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+        var devices = _fixture.Services.GetRequiredService<Esi.Core.Security.DeviceStore>();
+        var bridge = _fixture.Services.GetRequiredService<SessionAgentBridge>();
+
+        var before = devices.CountEnabled();
+
+        var (response, pairingId) = pairing.Create(new PairRequest
+        {
+            DeviceName = "Desktop prompt phone",
+            Platform = "android",
+            OsVersion = "16",
+            AppVersion = "1.0.0",
+        }, "192.168.1.102");
+
+        var attempt = pairing.Get(pairingId)!;
+        Assert.Equal(PairingStatus.Pending, attempt.Status);
+        Assert.Equal("pending", pairing.Poll(pairingId, attempt.ProvisioningSecret).Status);
+
+        // Byte for byte what SessionAgentRuntime sends once a person has answered.
+        bridge.HandleMessage(new SessionAgentMessage
+        {
+            T = SessionChannelProtocol.Events.PairingResult,
+            ResponseTo = pairingId,
+            CorrelationId = response.UserCode,
+            Name = "Desktop prompt phone",
+            Detail = "approved",
+            Succeeded = true,
+        });
+
+        Assert.Equal(PairingStatus.Approved, pairing.Get(pairingId)!.Status);
+        Assert.Equal(before + 1, devices.CountEnabled());
+
+        // And what the phone does next: the credentials come out exactly once.
+        var released = pairing.Poll(pairingId, attempt.ProvisioningSecret);
+        Assert.Equal("approved", released.Status);
+        Assert.NotNull(released.WrappedSecrets);
+        Assert.NotNull(released.DeviceId);
+        Assert.Equal("consumed", pairing.Poll(pairingId, attempt.ProvisioningSecret).Status);
+    }
+
+    [Fact]
+    public void Denying_on_the_desktop_prompt_resolves_the_attempt_without_pairing_anything()
+    {
+        var pairing = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+        var devices = _fixture.Services.GetRequiredService<Esi.Core.Security.DeviceStore>();
+        var bridge = _fixture.Services.GetRequiredService<SessionAgentBridge>();
+
+        var before = devices.CountEnabled();
+
+        var (response, pairingId) = pairing.Create(new PairRequest
+        {
+            DeviceName = "Refused phone",
+            Platform = "android",
+        }, "192.168.1.102");
+
+        bridge.HandleMessage(new SessionAgentMessage
+        {
+            T = SessionChannelProtocol.Events.PairingResult,
+            ResponseTo = pairingId,
+            CorrelationId = response.UserCode,
+            Name = "Refused phone",
+            Detail = "denied",
+            Succeeded = false,
+        });
+
+        Assert.Equal(PairingStatus.Denied, pairing.Get(pairingId)!.Status);
+        Assert.Equal("denied", pairing.Poll(pairingId, null).Status);
+        Assert.Equal(before, devices.CountEnabled());
+    }
+
+    [Fact]
+    public void A_prompt_nobody_answers_expires_the_attempt()
+    {
+        // The backstop fires when the dialog is closed by its own countdown, and the phone has
+        // to be told so rather than left polling until its own window runs out.
+        var pairing = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+        var bridge = _fixture.Services.GetRequiredService<SessionAgentBridge>();
+
+        var (_, pairingId) = pairing.Create(new PairRequest
+        {
+            DeviceName = "Ignored phone",
+            Platform = "android",
+        }, "192.168.1.102");
+
+        bridge.HandleMessage(new SessionAgentMessage
+        {
+            T = SessionChannelProtocol.Events.PairingResult,
+            ResponseTo = pairingId,
+            CorrelationId = "000000",
+            Name = "Ignored phone",
+            Detail = "expired",
+            Succeeded = false,
+        });
+
+        Assert.Equal(PairingStatus.Expired, pairing.Get(pairingId)!.Status);
+        Assert.Equal("expired", pairing.Poll(pairingId, null).Status);
     }
 
     [Fact]

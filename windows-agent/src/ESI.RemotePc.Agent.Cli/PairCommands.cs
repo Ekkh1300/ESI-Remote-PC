@@ -173,7 +173,7 @@ internal static class PairCommands
 
         try
         {
-            var (device, _, keyId) = pairing.Approve(attempt.PairingId, DeviceScope.Read | DeviceScope.Control | DeviceScope.Files);
+            var (device, _, keyId) = pairing.Approve(attempt.PairingId, PairingManager.DefaultScopes);
 
             audit.Record(AuditLog.ActionPairApproved, "ok", device.DeviceId, device.Name,
                 attempt.RemoteAddress, "approved from the command line");
