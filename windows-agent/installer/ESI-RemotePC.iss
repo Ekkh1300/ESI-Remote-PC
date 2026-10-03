@@ -512,6 +512,44 @@ begin
   WaitForAgentServing;
 end;
 
+{ A rule scoped to the private profile does nothing at all on a network Windows has classified
+  as Public, and plenty of home routers never advertise themselves, so Windows guesses Public.
+  What the user sees is a phone timing out against a PC that is right there and whose log says
+  it is listening - which reads as the product being broken rather than as a network setting.
+  Say it out loud at the moment the rule is added, and say what to do about it. }
+procedure WarnIfNetworkIsPublic;
+var
+  ResultCode: Integer;
+  ReportFile: String;
+  Lines: TArrayOfString;
+  Index: Integer;
+  Contents: String;
+begin
+  ReportFile := ExpandConstant('{tmp}\esi-netprofile.txt');
+  Exec(ExpandConstant('{sys}\cmd.exe'),
+    '/c netsh advfirewall show currentprofile > "' + ReportFile + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if not FileExists(ReportFile) then Exit;
+  if not LoadStringsFromFile(ReportFile, Lines) then Exit;
+  DeleteFile(ReportFile);
+
+  for Index := 0 to GetArrayLength(Lines) - 1 do
+    Contents := Contents + Lines[Index];
+
+  if Pos('Public', Contents) = 0 then Exit;
+
+  MsgBox('This network is set to Public, so Windows will block the agent''s port and a phone ' +
+    'on this same Wi-Fi cannot reach this PC - it will sit timing out even though the agent ' +
+    'is running and listening.' + #13#10 + #13#10 +
+    'If this is your own network, set it to Private:' + #13#10 + #13#10 +
+    '  Settings > Network and internet > Wi-Fi > your network >' +
+    '''Private network''' + #13#10 + '  (on Windows 10 this is under Properties)' + #13#10 + #13#10 +
+    'The firewall rule was deliberately not opened on the Public profile, because that would ' +
+    'expose the agent on any network the PC is plugged into - a coffee shop, an airport.',
+    mbInformation, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -585,6 +623,18 @@ begin
 
     if WizardIsTaskSelected('addfirewall') then
     begin
+      { Delete first, then add. `netsh advfirewall firewall add rule` has no notion of
+        "replace", so installing over an existing copy added a second rule with the same name
+        every time - this machine had accumulated three of each, and the list a user sees in
+        Windows Defender Firewall was six entries long for two ports. Uninstall deletes by
+        name, so a clean install followed by reinstall was fine; an upgrade was not. }
+      Exec(ExpandConstant('{sys}\netsh.exe'),
+        'advfirewall firewall delete rule name="ESI Remote PC (LAN)"',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exec(ExpandConstant('{sys}\netsh.exe'),
+        'advfirewall firewall delete rule name="ESI Remote PC discovery (LAN)"',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
       { Scoped to the private and domain profiles only. On a public network - a coffee shop,
         an airport - a rule that opened this port would expose the agent to the internet, and
         the agent's own LAN guard cannot help with that because the traffic would already have
@@ -598,6 +648,8 @@ begin
         'advfirewall firewall add rule name="ESI Remote PC discovery (LAN)" dir=in action=allow ' +
         'protocol=UDP localport={#DiscoveryPort} profile=private,domain',
         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+      WarnIfNetworkIsPublic;
     end;
   end;
 end;
