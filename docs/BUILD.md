@@ -298,7 +298,7 @@ curl.exe -k https://localhost:48220/api/v1/handshake
 
 **6. The installer round-trips.** This one is automated.
 `installer\install-cycle-test.ps1` runs the real installer through five states — clean,
-install, **install again over its own output**, uninstall, install again — and asserts 26
+install, **install again over its own output**, uninstall, install again — and asserts 29
 things about the result, asking the question a user would ask ("is it working?") by
 connecting to the agent's port rather than by reading the SCM's opinion. It needs
 administrator rights, so it is opt-in:

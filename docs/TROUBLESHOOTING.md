@@ -166,7 +166,7 @@ the setup log is the first place to look:
 ```
 
 The whole cycle is automated — `installer\install-cycle-test.ps1` runs install, reinstall,
-uninstall and reinstall-again, and asserts 26 things about the result. See
+uninstall and reinstall-again, and asserts 29 things about the result. See
 [`BUILD.md`](BUILD.md) §6.
 
 ---

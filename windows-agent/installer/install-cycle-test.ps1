@@ -138,10 +138,38 @@ function Test-FailureActions {
 }
 
 function Test-Privileges {
-    $value = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent' `
-                -Name requiredPrivileges -ErrorAction SilentlyContinue).requiredPrivileges
-    Assert-That 'requiredPrivileges is set for the service host' `
-        ($value -like '*SeTcbPrivilege*') "value was '$value'"
+    # The SCM reads this value as a REG_MULTI_SZ and looks up each element as a privilege name.
+    # Written as a REG_SZ it was one space-separated string, so the SCM searched for a
+    # privilege actually called "SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege",
+    # found none, and refused to launch the agent at all - SCM 7000 "The parameter is
+    # incorrect" on every boot, and nothing in the agent's log because the process was never
+    # created. See ROADMAP D27.
+    #
+    # So the kind is the assertion, not the contents: the previous check was
+    # `$value -like '*SeTcbPrivilege*'`, which is a boolean for a string and an *array* for a
+    # string[], so it could not tell the two apart - and when the fix made the value correct,
+    # the check threw instead of passing. Read it through the registry API rather than
+    # Get-ItemProperty so the kind is available at all.
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
+        'SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent')
+    if ($null -eq $key) {
+        Assert-That 'requiredPrivileges is a REG_MULTI_SZ for the service host' $false `
+            'the service key does not exist'
+        return
+    }
+
+    $kind = $key.GetValueKind('requiredPrivileges')
+    $value = @($key.GetValue('requiredPrivileges'))
+    $key.Close()
+
+    $shown = ($value -join ' | ')
+    Assert-That 'requiredPrivileges is a REG_MULTI_SZ for the service host' `
+        ($kind -eq [Microsoft.Win32.RegistryValueKind]::MultiString) "kind was $kind"
+
+    foreach ($privilege in 'SeTcbPrivilege', 'SeShutdownPrivilege', 'SeAssignPrimaryTokenPrivilege') {
+        Assert-That "requiredPrivileges lists $privilege on its own" `
+            ($value -contains $privilege) "value was '$shown'"
+    }
 }
 
 function Test-LogonTask {

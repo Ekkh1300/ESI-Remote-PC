@@ -147,10 +147,17 @@ passing:
 
 **The installer is now tested by running it.** `installer/install-cycle-test.ps1` drives the
 real thing through five states — clean, install, **install again over its own output**,
-uninstall, install again — and asserts 26 things, all passing. It asks the question a user
+uninstall, install again — and asserts 29 things, all passing. It asks the question a user
 would ask ("is it working?") by connecting to the agent's port, not by reading the SCM's
 opinion, because a service can be registered and permanently stopped and that is
 indistinguishable from a working install if all you check is registration.
+
+Three of those 29 are the `requiredPrivileges` check, and they are worth reading twice. The
+old one was `$value -like '*SeTcbPrivilege*'`, which is a boolean for a string and an *array*
+for a `string[]` — so it passed while the value was the broken REG_SZ that stopped the agent
+starting for months, and then **threw** the moment the value was corrected. A test that could
+tell neither version from the other. It now reads the value through the registry API, asserts
+that the kind is `REG_MULTI_SZ`, and asserts each privilege is its own element.
 
 Running it found five defects that every other check in the repository was blind to, and
 every one of them produced "installed, and nothing happens":
@@ -441,6 +448,7 @@ failed.
 | **The on-desktop prompt, clicked for real**: attempt → prompt window → click *Allow this device* → poll `pending` → poll `approved` with `deviceId ef9ad8efc29100d3`, `keyId 1` and a sealed envelope, and `Released the pairing secrets` in the log | D34 above — the path the whole product depends on and which no test had ever exercised |
 | **The service starts, from a registration that would not start before**: after the reinstall `requiredPrivileges` is a `MultiString` with three elements, `sc start` succeeds, 48220 is listening and the session agent connects | D27 above — `REG_SZ` to `REG_MULTI_SZ`, and the installer's verification now checks *running*, not just *registered* |
 | **Verified against a real boot**: the machine rebooted at 16:29 today and the agent did not come up; it does now, on the same key, once the value is a multi-string | the log line that would have answered this in one look — the first line of start-up — never existed, because the process was never created |
+| **`installer/install-cycle-test.ps1` against the delivered installer: 29 checks, 0 failed** across clean install → install over its own output → uninstall → install again, each step asking whether the port answers | and the `requiredPrivileges` assertions among them are the ones D27 needed |
 | The SPKI pin is unchanged by the rebuild, so the value already on the pairing form is still correct | the certificate lives in `agent.pfx`, not in the binary |
 | 415 responses since `Content-Type` was fixed | **zero** - the single 415 in today's log is the 12:31 run that found D31 |
 
