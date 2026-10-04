@@ -182,6 +182,37 @@ begin
   Result := ResultCode = 0;
 end;
 
+{ Reports whether a service is registered *and* running.
+    Registered is not the same as working, and the gap between the two is where this
+    product spent months: the key existed, every check the installer made passed, and the
+    agent still refused to start on every boot. sc query prints the state in a line
+    beginning "        STATE", and Exec cannot capture stdout, hence the temp file. }
+function ServiceIsRunning(const Name: String): Boolean;
+var
+  OutputFile: String;
+  { AnsiString, and filename first: the declaration is
+    LoadStringFromFile(const FileName: String; var S: AnsiString). }
+  Contents: AnsiString;
+  ResultCode: Integer;
+begin
+  OutputFile := ExpandConstant('{tmp}\esi-sc-query.txt');
+  DeleteFile(OutputFile);
+  Exec(ExpandConstant('{sys}\cmd.exe'), '/c ' + ExpandConstant('{sys}\sc.exe') +
+       ' query ' + Name + ' > ' + Chr(34) + OutputFile + Chr(34) + ' 2>&1',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode <> 0 then
+  begin
+    Result := False;
+    exit;
+  end;
+  if not LoadStringFromFile(OutputFile, Contents) then
+  begin
+    Result := False;
+    exit;
+  end;
+  Result := Pos('RUNNING', Uppercase(Contents)) > 0;
+end;
+
 { Reports whether a scheduled task is registered with Task Scheduler. }
 function TaskIsRegistered(const Name: String): Boolean;
 var
@@ -486,12 +517,29 @@ begin
 
   { requiredPrivileges. Undocumented but load-bearing: without it the account's
     SeTcbPrivilege is present but disabled, and the first CreateProcessAsUser into the
-    console session fails, so the session agent can only be started by the logon task. }
+    console session fails, so the session agent can only be started by the logon task.
+
+    It has to be REG_MULTI_SZ, and getting that wrong is the single most expensive bug in
+    this product's history. Written as REG_SZ it is one string naming a privilege actually
+    called "SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege", which does
+    not exist; the SCM's privilege lookup then fails and it refuses to launch the image at
+    all. The user sees SCM 7000 "The parameter is incorrect" on every boot, `sc start`
+    returns 87, and the agent's own log has no line after the boot timestamp because the
+    process never reached its first one - so it looks exactly like a broken executable. It
+    is not: the same binary runs perfectly by hand, and the same registration starts on
+    the first attempt once the value is a real multi-string. }
+  { The list is passed through reg.exe rather than RegWriteMultiStringValue: that routine takes
+    RootKey as an HKEY and the payload as a plain string, so it cannot express three separate
+    privileges. Note the trailing \0 on the last element - reg.exe rejects the \0\0 that
+    the documentation shows, with "Invalid value specified for '/d'". }
   Exec(ExpandConstant('{sys}\reg.exe'),
        'add ' + Q + 'HKLM\SYSTEM\CurrentControlSet\Services\ESIRemotePcAgent' + Q +
-       ' /v requiredPrivileges /t REG_SZ /d ' + Q +
-       'SeTcbPrivilege SeShutdownPrivilege SeAssignPrimaryTokenPrivilege' + Q + ' /f',
+       ' /v requiredPrivileges /t REG_MULTI_SZ /d ' + Q +
+       'SeTcbPrivilege\0SeShutdownPrivilege\0SeAssignPrimaryTokenPrivilege\0' + Q + ' /f',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode <> 0 then
+    AddProblem('requiredPrivileges could not be written as a REG_MULTI_SZ (reg.exe returned ' +
+      IntToStr(ResultCode) + '). Without it the SCM will not launch the agent at all.');
 
   { ---- The per-user session helper ----
     A logon-triggered scheduled task rather than a second Windows service. The helper has to
@@ -581,7 +629,13 @@ begin
       user who knows what to do next and a user who thinks the product is broken. }
     Missing := '';
     if not ServiceIsRegistered('ESIRemotePcAgent') then
-      Missing := Missing + 'ESIRemotePcAgent' + #13#10;
+      Missing := Missing + 'ESIRemotePcAgent' + #13#10
+    else if not ServiceIsRunning('ESIRemotePcAgent') then
+    { Registered is not running. This gap is why a registration the SCM cannot start still
+      installed cleanly and reported success for months: the check below only ever asked
+      whether the key existed. A service that is present and stopped is the exact state the
+      product was in after every boot. }
+      Missing := Missing + 'ESIRemotePcAgent (registered, but not running)' + #13#10;
     if not TaskIsRegistered('ESI Remote PC Session Agent') then
       Missing := Missing + 'logon task: ESI Remote PC Session Agent' + #13#10;
 
@@ -591,7 +645,7 @@ begin
     end
     else
     begin
-      Log('Verified: the agent service and the logon task are both registered.');
+      Log('Verified: the agent service is running and the logon task is registered.');
     end;
 
     { Anything the waits above noticed. Said out loud, because a silent install that leaves

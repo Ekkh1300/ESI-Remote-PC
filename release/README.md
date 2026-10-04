@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  B7831D2FBEBF9EEF8D9D70860EDC5F515
+ESI-RemotePC-Setup-1.0.0-x64.exe  68A0C5144C89B6E679BB9D871BBA53ED
 ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA507
 ```
 
@@ -396,6 +396,36 @@ credentials that follow; with the subscription removed, two of the three fail. O
 agent: `pending` → click **Allow this device** → `approved`, `deviceId ef9ad8efc29100d3`,
 `keyId 1`, envelope present, and `Approved Desktop e2e from the desktop prompt` in the log.
 
+**A ninth, and the one that decided whether the product was finished: the agent never
+started after a reboot.** The service was registered, `Start` was `Automatic`, and every boot
+produced SCM 7000 *"The parameter is incorrect"* — while the same executable, launched by hand,
+ran perfectly and bound 48220. That mismatch is the whole reason it was hard: the agent's own
+log had no line after the boot timestamp, so the process never reached its first one and there
+was nothing to read. Everything visible said the registration was fine.
+
+It was not. `requiredPrivileges` was written as **REG_SZ**, holding all three privileges in one
+space-separated string. The SCM reads that value as a REG_MULTI_SZ and looks each element up as
+a privilege name, so it searched for a privilege actually called *"SeTcbPrivilege
+SeShutdownPrivilege SeAssignPrimaryTokenPrivilege"*, found nothing, and refused to launch the
+image at all — `ERROR_INVALID_PARAMETER`, which `sc start` reports as 87. Written as a real
+multi-string, the identical registration starts on the first attempt.
+
+Two things had to change. The value is written as REG_MULTI_SZ — and via `reg.exe`, because
+`RegWriteMultiStringValue` takes `RootKey` as an `HKEY` and its payload as a plain string, so it
+cannot express three separate privileges at all; the terminating `\0` on the last element
+matters too, since `reg.exe` rejects the `\0\0` the documentation shows. And the installer's
+verification no longer asks only whether the service is *registered*: it now also asks whether
+it is *running*, because "the key exists" was the one check that had been passing this by for
+months. On the reinstall: `requiredPrivileges` reads back as `MultiString` with three elements,
+and the setup log says *"Verified: the agent service is running and the logon task is
+registered."*
+
+Two earlier theories were wrong and are now ruled out with evidence rather than argument. The
+unquoted `ImagePath` over a path with spaces is real — `sc create` consumes the outer quotes —
+and it changes nothing: the SCM started the service with the path exactly as the installer
+leaves it. And the 32-bit `sc.exe` stamping `WOW64` is gone from the key, and the service still
+failed.
+
 **Re-verified end to end on the delivered APK**, against the installed service:
 
 | | |
@@ -409,6 +439,8 @@ agent: `pending` → click **Allow this device** → `approved`, `deviceId ef9ad
 | `POST /apps/launch → 200` and `POST /apps/edge/terminate → 200` (15 processes) | signed requests **with a body** — the case that used to be 415 |
 | Cancel → Stop → Back after a live attempt: `Check address` and `Pair` both re-enabled, address and 44-character pin intact | D32 above |
 | **The on-desktop prompt, clicked for real**: attempt → prompt window → click *Allow this device* → poll `pending` → poll `approved` with `deviceId ef9ad8efc29100d3`, `keyId 1` and a sealed envelope, and `Released the pairing secrets` in the log | D34 above — the path the whole product depends on and which no test had ever exercised |
+| **The service starts, from a registration that would not start before**: after the reinstall `requiredPrivileges` is a `MultiString` with three elements, `sc start` succeeds, 48220 is listening and the session agent connects | D27 above — `REG_SZ` to `REG_MULTI_SZ`, and the installer's verification now checks *running*, not just *registered* |
+| **Verified against a real boot**: the machine rebooted at 16:29 today and the agent did not come up; it does now, on the same key, once the value is a multi-string | the log line that would have answered this in one look — the first line of start-up — never existed, because the process was never created |
 | The SPKI pin is unchanged by the rebuild, so the value already on the pairing form is still correct | the certificate lives in `agent.pfx`, not in the binary |
 | 415 responses since `Content-Type` was fixed | **zero** - the single 415 in today's log is the 12:31 run that found D31 |
 
