@@ -222,6 +222,17 @@ class PairingQr {
       if (_firstString(fields, _hostKeys).isEmpty && _looksLikeAuthority(uri.host)) {
         fields['host'] = uri.host;
         if (uri.port != 0) fields['port'] = uri.port;
+      } else if (_firstString(fields, _hostKeys).isEmpty) {
+        // `esiremotepc://pair/192.168.1.42?p=...` - the second shape in the doc comment above -
+        // puts the address in the *path*, because the authority is taken by "pair". Only the
+        // first segment is considered, and only when it is unmistakably an address, so this
+        // cannot invent one. The comment used to promise that shape while the parser silently
+        // ignored it.
+        final segment = uri.pathSegments.isEmpty ? '' : uri.pathSegments.first;
+        if (_looksLikeAddress(segment)) {
+          fields['host'] = segment;
+          if (uri.port != 0) fields['port'] = uri.port;
+        }
       }
       return fields;
     }

@@ -199,6 +199,45 @@ public sealed class PairingManager(
                $"&code={Uri.EscapeDataString(attempt.UserCode)}";
     }
 
+    /// <summary>
+    /// The URL behind the QR a PC shows when nothing is asking it for anything yet.
+    /// <para>
+    /// PROTOCOL.md §5.4 says the pairing QR carries the address, the device id, the pin and the
+    /// one-time secret, and the app has a scanner written for exactly that shape. But the only
+    /// QR the agent emitted came from <see cref="BuildPollingUrl"/>, which needs an attempt to
+    /// exist — and an attempt can only be started from the phone, which will not send one
+    /// until the form is filled, which needs the pin. So the scanner could never obtain the one
+    /// field that is genuinely hard to type, and pairing a real phone came down to reading 44
+    /// characters of base64 off a screen and typing them on a soft keyboard, where <c>l</c>,
+    /// <c>I</c>, <c>1</c>, <c>0</c> and <c>O</c> are indistinguishable and autocorrect is one
+    /// keystroke away. This is the other end of that loop: no attempt and therefore no secret,
+    /// just what the phone needs before it is able to ask.
+    /// </para>
+    /// <para>
+    /// Publishing the pin here gives an attacker on the LAN nothing they did not already have —
+    /// it is in the unauthenticated <c>GET /handshake</c> by design, which is precisely why the
+    /// app refuses to take it from there. What the QR adds is the out-of-band hop: nothing on
+    /// the network path can alter the pixels on this screen, so the phone ends up comparing
+    /// itself against what the user is actually looking at. See ROADMAP D35.
+    /// </para>
+    /// </summary>
+    public string BuildConnectUrl(string host, string deviceId, string? spkiPin)
+    {
+        var hostPart = string.IsNullOrWhiteSpace(host) ? "localhost" : host.Trim();
+
+        var url = new StringBuilder("esiremotepc://pair?host=")
+            .Append(Uri.EscapeDataString(hostPart))
+            .Append("&port=").Append(Port)
+            .Append("&deviceId=").Append(Uri.EscapeDataString(deviceId));
+
+        // No TLS means no pin to publish, and the app asks for it by hand rather than being
+        // handed an empty field it would silently accept.
+        if (!string.IsNullOrWhiteSpace(spkiPin))
+            url.Append("&pin=").Append(Uri.EscapeDataString(spkiPin));
+
+        return url.ToString();
+    }
+
     public IReadOnlyList<PairingAttempt> ListPending()
     {
         using var connection = database.Open();

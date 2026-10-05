@@ -100,6 +100,30 @@ public sealed class QrEncoderTests
         Assert.Equal(payload, decoded);
     }
 
+    /// <summary>
+    /// The one payload a phone has to be able to read: the connect QR on the idle pairing page.
+    /// <para>
+    /// This is the link that made pairing impossible for a human. The app disables its Pair
+    /// button until the pin field is non-empty, and every QR the agent used to emit was built
+    /// from an attempt - which carries the address and the one-time secret but never the pin -
+    /// so the scanner could not fill the one field that is genuinely hard to type. The way in
+    /// required the thing you could only get by being already inside. The connect URL is what
+    /// the page shows instead, and <c>PairingQr.parse</c> on the Dart side is pinned to exactly
+    /// this shape, so the two halves are asserted to the same literal.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_connect_QR_survives_encoding()
+    {
+        const string connectUrl =
+            "esiremotepc://pair?host=192.168.1.42&port=48220" +
+            "&deviceId=da704eb78efb0a3f&pin=f9Rl9PkFy20h7EmRGjInZguDr0eBYIEqSaO1yODVzDE%3D";
+
+        var modules = QrEncoder.Encode(connectUrl, out var version);
+
+        Assert.Equal(connectUrl, Decode(modules, version));
+    }
+
     [Fact]
     public void The_round_trip_holds_for_every_supported_version()
     {

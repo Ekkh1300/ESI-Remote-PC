@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  68A0C5144C89B6E679BB9D871BBA53ED
+ESI-RemotePC-Setup-1.0.0-x64.exe  C2D40F4977E78F290A634FE1784B08CC
 ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA507
 ```
 
@@ -129,9 +129,9 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 174 unit and integration
+**Verified by running it.** The Windows build is green end to end: 179 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
-that was repeated from the delivered installer file. The Android side is 158 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 163 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
@@ -326,7 +326,7 @@ was actually used. The header now goes out whenever a body does, signed or not; 
 of what is signed, so the signatures are unchanged, and one of the new tests asserts exactly
 that. Six tests were added to `signed_request_test.dart`, the file that already exists for
 "wiring that no formula test can see". Run against the previous code, three of them fail
-(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 158 pass.
+(`POST`, `PUT` and the raw `application/octet-stream` upload); with the fix, all 163 pass.
 
 **A sixth, found by cancelling a pairing instead of completing one: the form never came back
 to life.** `_start` awaits the future `context.push('/pairing')` returns, and that future's
@@ -433,6 +433,37 @@ and it changes nothing: the SCM started the service with the path exactly as the
 leaves it. And the 32-bit `sc.exe` stamping `WOW64` is gone from the key, and the service still
 failed.
 
+**A tenth, and the one that made the product unpairable by a human: the phone could not
+obtain the certificate pin at all.** Every other defect on this list broke something. This one
+removed the only way in. The app disables its `Pair` button until the pin field is non-empty —
+correctly, because the pin is what makes the connection worth trusting — and its own help text
+says to read it "from the PC's pairing screen, or scan its QR code". The pin *was* on the
+pairing page, as text. Scanning it was impossible: every QR the agent emitted was built from a
+pairing **attempt**, whose URL carries the address and the one-time secret but never the pin,
+and an attempt only exists after a phone has already asked to pair. So the app's `Scan` button
+could fill the address and never the pin, the `Pair` button stayed disabled, and the only route
+left was reading 44 characters of base64 off a monitor and typing them on a soft keyboard — where
+`l`, `I`, `1`, `0` and `O` are the same glyph to a human and autocorrect is one keystroke away.
+The way in required the thing you could only get by being already inside.
+
+The idle pairing page now shows a second QR, carrying `esiremotepc://pair?host=…&port=…&
+deviceId=…&pin=…` — no attempt, therefore no secret, just what the phone needs before it is
+able to ask. One scan fills address, port and pin, and the rest of the flow already worked. It
+discloses nothing an attacker on the LAN did not already have: the pin is in the
+unauthenticated `GET /handshake` by design, which is exactly why the app will not take it from
+there. What the QR adds is the out-of-band hop — nothing on the network path can alter the
+pixels on that screen, so the phone ends up comparing itself against what the user is actually
+looking at. And because the page is usually opened *on the PC*, where the host is `localhost`
+and the QR would be useless, it now says so and names the addresses that would work instead.
+
+The chain is pinned at every link by a literal both sides share: `PairingManager.BuildConnectUrl`
+emits that exact string, `QrEncoderTests` round-trips it through an independent decoder to prove
+it survives encoding, and `pairing_qr_test.dart` feeds the same string to `PairingQr.parse` and
+reads address, port, device id and pin back. Writing the test found a smaller bug in the same
+area: `PairingQr`'s own doc comment promised a second accepted shape,
+`esiremotepc://pair/192.168.1.42?…`, which put the address in the **path** while the parser
+read `uri.host` — so it silently did not work.
+
 **Re-verified end to end on the delivered APK**, against the installed service:
 
 | | |
@@ -449,6 +480,7 @@ failed.
 | **The service starts, from a registration that would not start before**: after the reinstall `requiredPrivileges` is a `MultiString` with three elements, `sc start` succeeds, 48220 is listening and the session agent connects | D27 above — `REG_SZ` to `REG_MULTI_SZ`, and the installer's verification now checks *running*, not just *registered* |
 | **Verified against a real boot, twice**: rebooted at 16:29 on 4 October and the agent did not come up; rebooted at 16:28:24 on 5 October and it logged its first line **ten seconds later, unprompted**, with no SCM event, then the session agent connected 30 s after that | the log line that would have answered this in one look — the first line of start-up — never existed before, because the process was never created |
 | **`installer/install-cycle-test.ps1` against the delivered installer: 29 checks, 0 failed** across clean install → install over its own output → uninstall → install again, each step asking whether the port answers | and the `requiredPrivileges` assertions among them are the ones D27 needed |
+| **The idle pairing page now serves a QR that carries the pin**: `GET /pairing` contains `/pairing/qr.svg?connect=1`, `?connect=1` returns `image/svg+xml`, and the connect URL round-trips through the QR encoder's independent decoder | D35 below — the loop that made the app unpairable by hand, and the **APK is unchanged**, so a phone that already has it can now scan the QR |
 | The SPKI pin is unchanged by the rebuild, so the value already on the pairing form is still correct | the certificate lives in `agent.pfx`, not in the binary |
 | 415 responses since `Content-Type` was fixed | **zero** - the single 415 in today's log is the 12:31 run that found D31 |
 

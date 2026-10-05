@@ -437,6 +437,69 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
         Assert.Equal("expired", pairing.Poll(pairingId, null).Status);
     }
 
+    // ===============================================================================
+    // D35 - a phone must be able to get the certificate pin without typing it
+    // ===============================================================================
+
+    /// <summary>
+    /// The idle pairing page has to offer a QR, because the app's own help text tells the user
+    /// to read the pin from the PC's pairing screen or scan its QR.
+    /// <para>
+    /// The app disables Pair until the pin field is non-empty, and the only QR the agent emitted
+    /// was built from an attempt's polling URL - which carries the address and the one-time
+    /// secret but never the pin. The scanner therefore could not fill the one field that is
+    /// genuinely hard to type, and the idle page said only "open this page again with
+    /// ?code=123456", a code that exists only after a phone has already asked to pair. So the
+    /// loop could not be entered at all: the way in required the thing you could only get by
+    /// being already inside.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_pairing_page_offers_a_QR_a_phone_can_read_the_pin_from()
+    {
+        var response = await Client.GetAsync("/pairing");
+        var body = await ReadAsync(response);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("/pairing/qr.svg?connect=1", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_connect_QR_is_an_image()
+    {
+        var response = await Client.GetAsync("/pairing/qr.svg?connect=1&host=192.168.1.42");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("image/svg+xml", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public void The_connect_URL_carries_what_a_phone_cannot_type()
+    {
+        // The exact shape PairingQr.parse documents, so the two sides are pinned to each other.
+        var pairing = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+        const string pin = "f9Rl9PkFy20h7EmRGjInZguDr0eBYIEqSaO1yODVzDE=";
+
+        var url = pairing.BuildConnectUrl("192.168.1.42", "da704eb78efb0a3f", pin);
+
+        Assert.StartsWith("esiremotepc://pair?host=192.168.1.42", url, StringComparison.Ordinal);
+        Assert.Contains("&port=" + pairing.Port, url, StringComparison.Ordinal);
+        Assert.Contains("&deviceId=da704eb78efb0a3f", url, StringComparison.Ordinal);
+        Assert.Contains("&pin=" + Uri.EscapeDataString(pin), url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_connect_URL_with_no_TLS_carries_no_pin_rather_than_an_empty_one()
+    {
+        // An empty `pin=` would be read as "this QR has no pin", which is the same outcome,
+        // but it would also look like a field the agent meant to fill in. Say nothing instead.
+        var pairing = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+
+        var url = pairing.BuildConnectUrl("192.168.1.42", "da704eb78efb0a3f", null);
+
+        Assert.DoesNotContain("pin", url, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Handshake_advertises_the_spki_pin()
     {

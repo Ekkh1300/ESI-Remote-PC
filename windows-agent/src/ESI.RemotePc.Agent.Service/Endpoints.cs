@@ -140,12 +140,42 @@ public static class Endpoints
         // additionally shows the QR, and is what the app links to after it has a code to
         // show. The QR is how the provisioning secret reaches the phone when the session
         // agent is not there to show it on the desktop.
-        endpoints.MapGet("/pairing", ([FromServices] IdentityService identity,
+        endpoints.MapGet("/pairing", (HttpContext http, [FromServices] IdentityService identity,
                 [FromServices] CertificateAuthority authority,
                 [FromServices] PairingManager pairing,
                 string? code) =>
         {
             var html = RenderPairingPage(identity, authority);
+
+            // The address the user reached this page on, which is the one their phone can
+            // resolve — not the agent's idea of its own LAN address, which is a different
+            // interface on a multi-homed machine and produces a code that cannot connect.
+            var seenHost = http.Request.Host.Host;
+
+            // Opened from the PC itself, the host is "localhost", and a QR carrying that sends
+            // the phone nowhere. Saying so - with the addresses that would work - is the
+            // difference between a QR and a puzzle.
+            if (IsLoopback(seenHost))
+            {
+                var reachable = string.Join(", ", LanAddresses());
+
+                html = html.Replace(
+                    "<!--LOOPBACK-->",
+                    $"""
+                     <div class="hint" style="border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.10);color:#fde68a">
+                       <b>This page is open on the PC itself</b>, so the QR below carries
+                       <code>localhost</code> and a phone cannot use it. Open this page again from
+                       the phone's side of the network &mdash; at
+                       {(string.IsNullOrEmpty(reachable) ? "this machine's address on that network" : reachable)}
+                       &mdash; and scan the QR there.
+                     </div>
+                     """,
+                    StringComparison.Ordinal);
+            }
+            else
+            {
+                html = html.Replace("<!--LOOPBACK-->", string.Empty, StringComparison.Ordinal);
+            }
 
             if (!string.IsNullOrWhiteSpace(code) && pairing.GetByUserCode(code) is { Status: PairingStatus.Pending })
             {
@@ -169,12 +199,18 @@ public static class Endpoints
             {
                 html = html.Replace(
                     "<!--QR-->",
-                    """
+                    $"""
                      <section class="qr">
-                       <p class="k">Open this page again with <code>?code=123456</code>, using the
-                          six-digit code shown on the phone, to display the pairing QR.</p>
+                       <p class="k">Scan this with the phone to fill in the address, the device id
+                          and the certificate pin &mdash; all three at once, nothing typed. It
+                          carries no secret, so it is safe to leave on screen; the one-time secret
+                          arrives on a second code once a phone is actually asking to pair.</p>
+                       <img src="/pairing/qr.svg?connect=1&amp;host={Uri.EscapeDataString(seenHost)}"
+                            width="240" height="240" alt="Pairing connect QR code">
+                       <p class="k">Prefer to type it? The address is the one this page is open on,
+                          the port is {pairing.Port}, and the pin is above.</p>
                      </section>
-                     """,
+                    """,
                     StringComparison.Ordinal);
             }
 
@@ -191,9 +227,23 @@ public static class Endpoints
         // Keyed by the six-digit user code rather than the internal attempt id, because the
         // user is the one who knows the code: they read it off their phone and type it here.
         // That also keeps the long-lived attempt id out of a URL that gets typed.
-        endpoints.MapGet("/pairing/qr.svg", ([FromServices] PairingManager pairing, string code, string? host) =>
+        endpoints.MapGet("/pairing/qr.svg", ([FromServices] PairingManager pairing,
+                [FromServices] IdentityService identity,
+                [FromServices] CertificateAuthority authority,
+                string? code, string? host, string? connect) =>
         {
-            var attempt = pairing.GetByUserCode(code);
+            // The "connect" QR: what a phone needs *before* it can ask to pair at all. No
+            // attempt, therefore no secret - see PairingManager.BuildConnectUrl for why this
+            // exists, and for why putting the pin into a QR on the PC's own screen discloses
+            // nothing an attacker on the LAN did not already have.
+            if (!string.IsNullOrEmpty(connect))
+            {
+                var connectUrl = pairing.BuildConnectUrl(
+                    host ?? "localhost", identity.DeviceId, authority.SpkiPin);
+                return Results.Content(RenderQrSvg(connectUrl), "image/svg+xml; charset=utf-8");
+            }
+
+            var attempt = pairing.GetByUserCode(code ?? string.Empty);
 
             if (attempt is null || attempt.Status != PairingStatus.Pending)
             {
@@ -281,6 +331,41 @@ public static class Endpoints
             """;
     }
 
+    /// <summary>True when the host a request arrived on can only ever mean this machine.</summary>
+    private static bool IsLoopback(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+        host is "::1" or "[::1]" ||
+        host.StartsWith("127.", StringComparison.Ordinal);
+
+    /// <summary>
+    /// This machine's own IPv4 addresses, so the pairing page can name them when it has been
+    /// opened on localhost. Operational, routable ones only: Windows also lists loopback,
+    /// link-local and APIPA addresses, and none of those is how a phone reaches a PC.
+    /// </summary>
+    private static IEnumerable<string> LanAddresses()
+    {
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+            if (nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                continue;
+
+            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (unicast.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                    continue;
+
+                var text = unicast.Address.ToString();
+                if (text.StartsWith("169.254.", StringComparison.Ordinal)) continue;
+                found.Add(text);
+            }
+        }
+
+        return found;
+    }
+
     private static string RenderPairingPage([FromServices] IdentityService identity, [FromServices] CertificateAuthority authority)
     {
         var pin = authority.SpkiPin ?? "(TLS unavailable)";
@@ -321,6 +406,7 @@ public static class Endpoints
               <div class="row"><span class="k">Device ID</span><span class="v">{{identity.DeviceId}}</span></div>
               <div class="row"><span class="k">TLS SPKI pin</span><span class="v pin">{{pin}}</span></div>
               <div class="row"><span class="k">API</span><span class="v">{{ProtocolConstants.ApiBase}}</span></div>
+              <!--LOOPBACK-->
               <!--QR-->
               <div class="hint">
                 <b>How pairing works.</b> The phone asks to pair and shows you a six-digit code.
