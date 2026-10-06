@@ -871,6 +871,43 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
     }
 
     // D36 - approving must not consume the only copy of the provisioning secret
+    // D37 - the pairing page must not scale a QR onto fractional pixels
+    [Fact]
+    public async Task The_pairing_page_sizes_its_QR_image_to_whole_modules()
+    {
+        // A phone reads module centres and measures transitions between them, so every module
+        // has to be the same whole number of pixels across. This page used to pin width="240"
+        // on the image whatever the code needed, which put 53 cells into 240 pixels - 4.528
+        // each - and a real phone reported that its camera could not find the code at all.
+        using var page = await Client.GetAsync("/pairing");
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+
+        var html = await page.Content.ReadAsStringAsync();
+        var image = System.Text.RegularExpressions.Regex.Match(html, "<img[^>]*qr\\.svg[^>]*>");
+        Assert.True(image.Success, "the pairing page offers no QR image");
+
+        var width = System.Text.RegularExpressions.Regex.Match(image.Value, "width=\"(\\d+)\"");
+        Assert.True(width.Success, "the QR image has no width, so the browser picks one");
+
+        var height = System.Text.RegularExpressions.Regex.Match(image.Value, "height=\"(\\d+)\"");
+        Assert.True(height.Success, "the QR image has no height, so the browser picks one");
+
+        Assert.Equal(width.Groups[1].Value, height.Groups[1].Value);
+
+        // The width has to be a whole number of pixels per module, because the browser will
+        // render the image at exactly this many pixels and not rescale it.
+        var extent = int.Parse(width.Groups[1].Value);
+        Assert.Equal(0, extent % Endpoints.QrModulePixels);
+
+        // And enough pixels per module for a phone to read it from arm's length.
+        var connectQr = await Client.GetAsync("/pairing/qr.svg?connect=1&host=127.0.0.1");
+        var svg = await connectQr.Content.ReadAsStringAsync();
+        var cells = int.Parse(System.Text.RegularExpressions.Regex
+            .Match(svg, "viewBox=\"0 0 (\\d+)").Groups[1].Value) / Endpoints.QrModulePixels;
+
+        Assert.Equal(extent, cells * Endpoints.QrModulePixels);
+    }
+
     [Fact]
     public async Task An_approved_pairing_announces_itself_only_once_the_phone_has_its_keys()
     {

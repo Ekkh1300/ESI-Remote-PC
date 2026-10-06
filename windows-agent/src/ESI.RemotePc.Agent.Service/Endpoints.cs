@@ -179,6 +179,13 @@ public static class Endpoints
 
             if (!string.IsNullOrWhiteSpace(code) && pairing.GetByUserCode(code) is { Status: PairingStatus.Pending })
             {
+                // The image is sized from the code it points at, not from a fixed 240. A QR
+                // scaled to a width that is not a whole number of pixels per module cannot be
+                // read by a phone - which is what a real phone reported on this page (D37).
+                var pending = pairing.GetByUserCode(code)!;
+                var pollingUrl = pairing.BuildPollingUrl(pending, seenHost, pairing.Port);
+                var extent = QrExtent(pollingUrl);
+
                 html = html.Replace(
                     "<!--QR-->",
                     $"""
@@ -186,17 +193,23 @@ public static class Endpoints
                        <p class="k">A device is asking to pair with code <b>{code}</b>.</p>
                        <p class="k">Scan this with the phone. It carries the one-time secret that
                           lets <em>that</em> phone - and only that phone - collect the credentials.</p>
-                       <img src="/pairing/qr.svg?code={Uri.EscapeDataString(code)}" width="240" height="240"
+                       <img src="/pairing/qr.svg?code={Uri.EscapeDataString(code)}" width="{extent}" height="{extent}"
                             alt="Pairing QR code for {code}">
-                       <p class="k">Then approve the request on the phone. If you did not start
-                          this, choose Deny - approving a pairing you did not initiate gives
-                          whoever asked for it control of this machine.</p>
+                       <p class="k">Then scan this second code on the phone, and only then allow the
+                          request on the PC. If you did not start this, choose Deny - approving a
+                          pairing you did not initiate gives whoever asked for it control of this
+                          machine.</p>
                      </section>
                      """,
                     StringComparison.Ordinal);
             }
             else
             {
+                // Same reasoning as the pending case above: the image is sized from the code it
+                // points at, so the browser never rescales a QR onto fractional pixels (D37).
+                var connectExtent = QrExtent(
+                    pairing.BuildConnectUrl(seenHost, identity.DeviceId, authority.SpkiPin));
+
                 html = html.Replace(
                     "<!--QR-->",
                     $"""
@@ -206,7 +219,7 @@ public static class Endpoints
                           carries no secret, so it is safe to leave on screen; the one-time secret
                           arrives on a second code once a phone is actually asking to pair.</p>
                        <img src="/pairing/qr.svg?connect=1&amp;host={Uri.EscapeDataString(seenHost)}"
-                            width="240" height="240" alt="Pairing connect QR code">
+                            width="{connectExtent}" height="{connectExtent}" alt="Pairing connect QR code">
                        <p class="k">Prefer to type it? The address is the one this page is open on,
                           the port is {pairing.Port}, and the pin is above.</p>
                      </section>
@@ -240,7 +253,9 @@ public static class Endpoints
             {
                 var connectUrl = pairing.BuildConnectUrl(
                     host ?? "localhost", identity.DeviceId, authority.SpkiPin);
-                return Results.Content(RenderQrSvg(connectUrl), "image/svg+xml; charset=utf-8");
+                return Results.Content(
+                    BuildQrSvg(Esi.Platform.Pairing.QrEncoder.Encode(connectUrl)),
+                    "image/svg+xml; charset=utf-8");
             }
 
             var attempt = pairing.GetByUserCode(code ?? string.Empty);
@@ -254,9 +269,25 @@ public static class Endpoints
             }
 
             var url = pairing.BuildPollingUrl(attempt, host ?? "localhost", pairing.Port);
-            return Results.Content(RenderQrSvg(url), "image/svg+xml; charset=utf-8");
+            return Results.Content(
+                BuildQrSvg(Esi.Platform.Pairing.QrEncoder.Encode(url)),
+                "image/svg+xml; charset=utf-8");
         });
     }
+
+    /// <summary>
+    /// The pixel width a QR will be drawn at, so the page can size its image to match.
+    /// </summary>
+    /// <remarks>
+    /// The pairing page asks for this rather than pinning a width of its own, because a QR
+    /// scaled to a width that is not a whole number of pixels per module is one a phone cannot
+    /// read (D37). Six pixels per module, matching <see cref="QrModulePixels"/> here.
+    /// </remarks>
+    internal static int QrExtent(string payload)
+        => (Esi.Platform.Pairing.QrEncoder.Encode(payload).GetLength(0) + 8) * QrModulePixels;
+
+    /// <summary>Pixels per QR module, shared by the renderer and the page's sizing.</summary>
+    internal const int QrModulePixels = 6;
 
     /// <summary>
     /// Renders a QR code as an SVG.
@@ -296,12 +327,29 @@ public static class Endpoints
     private static string RenderQrSvg(string payload)
     {
         var modules = Esi.Platform.Pairing.QrEncoder.Encode(payload);
+        return BuildQrSvg(modules);
+    }
+
+    /// <summary>
+    /// Builds the SVG for an encoded QR.
+    /// <para>
+    /// The extent is a whole number of pixels per module, and the caller is told what it is, so
+    /// the browser can draw the code at 1:1 instead of scaling it. That is not a cosmetic point
+    /// (D37). This page used to pin <c>width="240"</c> on the image, and a polling URL needs 53
+    /// cells across - so the browser fitted 53 cells into 240 pixels, or 4.528 each. Half the
+    /// module boundaries landed between pixels, the grid stopped being square, and a phone's
+    /// scanner reported no code at all. Asking for 318 when 318 was what was already drawn is
+    /// the whole fix.
+    /// </para>
+    /// </summary>
+    private static string BuildQrSvg(bool[,] modules)
+    {
         var size = modules.GetLength(0);
 
         // The quiet zone is part of the specification, not decoration: a scanner needs four
         // clear modules around the symbol to establish timing before it starts reading.
         const int quiet = 4;
-        const int moduleSize = 6;
+        var moduleSize = QrModulePixels;
         var extent = (size + quiet * 2) * moduleSize;
 
         var path = new StringBuilder(extent * extent / 8);

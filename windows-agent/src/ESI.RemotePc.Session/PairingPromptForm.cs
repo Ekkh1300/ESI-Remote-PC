@@ -53,7 +53,7 @@ internal sealed class PairingPromptForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(540, 380);
+        ClientSize = new Size(560, 400);
         BackColor = Color.FromArgb(20, 22, 28);
         ForeColor = Color.FromArgb(228, 232, 240);
         Font = new Font("Segoe UI", 9F);
@@ -84,8 +84,11 @@ internal sealed class PairingPromptForm : Form
         // The QR is the actual transfer. Without it the phone can never obtain the
         // provisioning secret, and a pairing approved here would sit approved forever with
         // the phone polling for credentials that are never released.
-        var qr = RenderQr(request.PollingUrl, 150);
-        qr.Location = new Point(348, 50);
+        // The QR is the transfer, so it is given real estate rather than a decorative corner. A
+        // 212-pixel code scanned from a desk needs about a third of a form's width; 150 pixels
+        // of it was the difference between "the camera cannot see it" and "the phone paired".
+        var qr = RenderQr(request.PollingUrl, 190);
+        qr.Location = new Point(320, 46);
 
         var codeCaption = new Label
         {
@@ -171,6 +174,27 @@ internal sealed class PairingPromptForm : Form
     /// is being trained to distrust. The payload is already in the request.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Draws the QR straight to a bitmap, with every module the same whole number of pixels.
+    /// </summary>
+    /// <para>
+    /// The width is chosen rather than given. The obvious implementation - render at some scale,
+    /// then resize to whatever the layout asked for - is what this used to do, and it is why a
+    /// phone with a working camera could not read this QR (D37). It rendered 53 cells across
+    /// (45 modules plus the quiet zone, which is what a ~120 character URL needs) into 212
+    /// pixels and then squeezed the whole thing into 150: 150/53 is 2.83, so every module became
+    /// alternately two and three pixels wide, and half the boundaries landed on a fractional
+    /// pixel. Nearest neighbour cannot repair that; it faithfully reproduces an uneven grid. A
+    /// scanner samples the centres of modules and measures transitions between them, and a grid
+    /// whose cells are not equal has no consistent transition width to find - so the detector
+    /// reports no code. The camera was never the problem.
+    /// </para>
+    /// <para>
+    /// Whole modules at three pixels or more is what makes it readable at arm's length: the
+    /// finder patterns stay square, the timing pattern keeps its run lengths, and the data
+    /// region has uniform cells. The bitmap is then placed at its natural size with no rescale.
+    /// </para>
+    /// </remarks>
     private static PictureBox RenderQr(string payload, int pixels)
     {
         try
@@ -180,12 +204,24 @@ internal sealed class PairingPromptForm : Form
 
             // Four modules of quiet zone, as the specification requires.
             const int quiet = 4;
-            const int scale = 4;
-            var extent = (size + quiet * 2) * scale;
+            var cells = size + quiet * 2;
+
+            // Whole pixels per module, and never fewer than three. Asking for fewer than the
+            // layout wants is deliberate: a slightly larger QR is invisible, a QR a scanner
+            // cannot read is the end of the pairing.
+            var scale = Math.Max(3, pixels / cells);
+            var extent = cells * scale;
 
             using var bitmap = new Bitmap(extent, extent);
             using var graphics = Graphics.FromImage(bitmap);
             graphics.Clear(Color.White);
+
+            // No smoothing, and no interpolation to undo later: each module is filled as a
+            // whole number of pixels, so the grid is exact by construction rather than by luck.
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
 
             using var brush = new SolidBrush(Color.Black);
             for (var row = 0; row < size; row++)
@@ -197,19 +233,11 @@ internal sealed class PairingPromptForm : Form
                 }
             }
 
-            // Scaled with nearest neighbour: interpolating a QR turns crisp module edges
-            // into gradients, and a scanner reads gradients as nothing.
-            var scaled = new Bitmap(pixels, pixels);
-            using var destination = Graphics.FromImage(scaled);
-            destination.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-            destination.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-            destination.DrawImage(bitmap, 0, 0, pixels, pixels);
-
             return new PictureBox
             {
-                Image = scaled,
+                Image = bitmap,
                 SizeMode = PictureBoxSizeMode.Zoom,
-                Size = new Size(pixels, pixels),
+                Size = new Size(extent, extent),
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
             };
