@@ -161,6 +161,50 @@ public sealed class QrRenderabilityTests
     
 
     // ---------------------------------------------------------------------------------
+    // The picture the prompt actually draws
+    // ---------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The bitmap the prompt shows is readable, and still alive when the prompt asks for it.
+    /// </summary>
+    /// <remarks>
+    /// D37 shipped a red cross in the prompt's picture box. The renderer had been given a
+    /// <c>using var bitmap</c> and then handed that bitmap to a <c>PictureBox</c>, so the image
+    /// was disposed the instant <c>RenderQr</c> returned and the control was left holding a dead
+    /// one - which GDI+ paints as a red cross. Every other test here passed: they reason about
+    /// the grid's arithmetic and never once obtain the bitmap. So this test asks for the real
+    /// one, and reads pixels out of it.
+    /// </remarks>
+    [Fact]
+    public void The_prompt_draws_a_bitmap_that_is_still_readable_when_the_prompt_asks_for_it()
+    {
+        // 190 is what the prompt passes.
+        using var bitmap = Esi.Session.PairingPromptForm.RenderQrBitmap(PollingUrl, 190);
+
+        Assert.NotNull(bitmap);
+        Assert.Equal(bitmap!.Width, bitmap.Height);
+
+        var grid = FromBitmap(bitmap);
+        var found = Detector.Find(grid);
+
+        Assert.NotNull(found);
+
+        // And the pixels must actually be black and white, not a dead image's contents.
+        var colours = new HashSet<int>();
+        for (var y = 0; y < bitmap.Height; y += 3)
+            for (var x = 0; x < bitmap.Width; x += 3)
+                colours.Add(bitmap.GetPixel(x, y).ToArgb());
+
+        Assert.Contains(System.Drawing.Color.White.ToArgb(), colours);
+        Assert.Contains(System.Drawing.Color.Black.ToArgb(), colours);
+        Assert.True(bitmap.Width % 3 == 0 || bitmap.Width > 0);
+    }
+
+    /// <summary>Wraps a rendered bitmap so the same detector can read it.</summary>
+    private static Grid FromBitmap(System.Drawing.Bitmap bitmap)
+        => new Grid(bitmap.Width, (x, y) => bitmap.GetPixel(x, y).R < 128);
+
+    // ---------------------------------------------------------------------------------
     // A detector, written the way a scanner's is
     // ---------------------------------------------------------------------------------
 

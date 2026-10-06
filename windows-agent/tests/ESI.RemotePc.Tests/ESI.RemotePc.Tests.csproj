@@ -40,6 +40,12 @@
          and not otherwise covered by anything. The CLI already exposes its internals to this
          assembly. -->
     <ProjectReference Include="..\..\src\ESI.RemotePc.Agent.Cli\ESI.RemotePc.Agent.Cli.csproj" />
+    <!--
+      For PairingPromptForm.RenderQrBitmap. D37 got the QR's arithmetic right and still shipped a
+      broken picture, because every test reasoned about numbers and none of them ever held the
+      bitmap the prompt draws. Reaching the renderer directly is what closes that gap.
+    -->
+    <ProjectReference Include="..\..\src\ESI.RemotePc.Session\ESI.RemotePc.Session.csproj" />
   </ItemGroup>
 
 </Project>

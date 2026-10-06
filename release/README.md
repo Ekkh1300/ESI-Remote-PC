@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  957126B9F6D4D4DD0E0EC61FF42825380E10D3AB3E7666F3EBC8EAC68A3F3309
+ESI-RemotePC-Setup-1.0.0-x64.exe  7E487E9FBB4717CC32AC48EC07FA24F9E0A68D554E58A84B4BC4A66994D99BE1
 ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA5
 ```
 
@@ -541,3 +541,13 @@ reconstructs what a scanner sees - all three finder patterns, the pitch derived 
 the suite cannot pass by being lenient.
 
 The APK is unchanged. The camera was never the problem and the phone needs no new build.
+## D38 - the prompt's picture box showed a red cross
+
+D37 changed the prompt's QR to whole-pixel modules and wrapped the bitmap in a using, then handed that
+bitmap to the PictureBox. The image was disposed the instant the renderer returned, so the control held a
+dead one and GDI+ drew a red cross. The pre-D37 code had been correct by accident: its bitmap was declared
+outside any using precisely because it escaped into the control, and the rewrite tidied that away.
+
+All five D37 tests passed throughout. They check the grid's arithmetic and never obtain the bitmap the prompt
+draws. The_prompt_draws_a_bitmap_that_is_still_readable_when_the_prompt_asks_for_it now runs the same
+detector over the real pixels, and asserts the bitmap still holds black and white. Verified to bite.

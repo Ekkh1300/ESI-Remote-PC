@@ -199,45 +199,17 @@ internal sealed class PairingPromptForm : Form
     {
         try
         {
-            var modules = Esi.Platform.Pairing.QrEncoder.Encode(payload);
-            var size = modules.GetLength(0);
-
-            // Four modules of quiet zone, as the specification requires.
-            const int quiet = 4;
-            var cells = size + quiet * 2;
-
-            // Whole pixels per module, and never fewer than three. Asking for fewer than the
-            // layout wants is deliberate: a slightly larger QR is invisible, a QR a scanner
-            // cannot read is the end of the pairing.
-            var scale = Math.Max(3, pixels / cells);
-            var extent = cells * scale;
-
-            using var bitmap = new Bitmap(extent, extent);
-            using var graphics = Graphics.FromImage(bitmap);
-            graphics.Clear(Color.White);
-
-            // No smoothing, and no interpolation to undo later: each module is filled as a
-            // whole number of pixels, so the grid is exact by construction rather than by luck.
-            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
-            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-            graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-            graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
-
-            using var brush = new SolidBrush(Color.Black);
-            for (var row = 0; row < size; row++)
-            {
-                for (var col = 0; col < size; col++)
-                {
-                    if (modules[row, col])
-                        graphics.FillRectangle(brush, (col + quiet) * scale, (row + quiet) * scale, scale, scale);
-                }
-            }
+            // The bitmap is not a `using`. The PictureBox holds it for as long as the prompt is
+            // up and disposes it with itself; disposing here instead leaves the control holding
+            // a dead image, which GDI+ draws as a red cross. That is precisely what D37 did - the
+            // arithmetic was correct and the user got a broken-image glyph.
+            var bitmap = RenderQrBitmap(payload, pixels);
 
             return new PictureBox
             {
                 Image = bitmap,
                 SizeMode = PictureBoxSizeMode.Zoom,
-                Size = new Size(extent, extent),
+                Size = bitmap.Size,
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
             };
@@ -252,6 +224,58 @@ internal sealed class PairingPromptForm : Form
             // scan target rather than an honest fallback.
             return new PictureBox { Size = new Size(pixels, pixels) };
         }
+    }
+
+    /// <summary>
+    /// Renders a payload to a bitmap for a prompt, at whole pixels per module.
+    /// </summary>
+    /// <remarks>
+    /// Separated from <see cref="RenderQr"/> and marked internal so it can be called from a
+    /// test. The arithmetic was right in D37 and the picture was still broken - the image was
+    /// disposed before anyone drew it - which no test could see, because every test reasoned
+    /// about the numbers and none of them ever obtained a bitmap and looked at it. A method
+    /// that returns the pixels is one a test can hold on to.
+    /// <para>
+    /// The caller owns the returned bitmap.
+    /// </para>
+    /// </remarks>
+    internal static Bitmap RenderQrBitmap(string payload, int requestedPixels)
+    {
+        var modules = Esi.Platform.Pairing.QrEncoder.Encode(payload);
+        var size = modules.GetLength(0);
+
+        // Four modules of quiet zone, as the specification requires.
+        const int quiet = 4;
+        var cells = size + quiet * 2;
+
+        // Whole pixels per module, and never fewer than three. Asking for more than the layout
+        // wants is deliberate: a slightly larger QR is invisible, a QR a scanner cannot read is
+        // the end of the pairing.
+        var scale = Math.Max(3, requestedPixels / cells);
+        var extent = cells * scale;
+
+        var bitmap = new Bitmap(extent, extent);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.Clear(Color.White);
+
+        // No smoothing and no interpolation: each module is filled as a whole number of pixels,
+        // so the grid is exact by construction rather than by luck.
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
+
+        using var brush = new SolidBrush(Color.Black);
+        for (var row = 0; row < size; row++)
+        {
+            for (var col = 0; col < size; col++)
+            {
+                if (modules[row, col])
+                    graphics.FillRectangle(brush, (col + quiet) * scale, (row + quiet) * scale, scale, scale);
+            }
+        }
+
+        return bitmap;
     }
 
     /// <summary>The answer, valid once the dialog has closed.</summary>
