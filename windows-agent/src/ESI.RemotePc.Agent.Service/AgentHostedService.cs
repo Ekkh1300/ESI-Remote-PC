@@ -188,7 +188,11 @@ public sealed class AgentHostedService(
         // be applied to the attempt. Nothing was listening for it, so Approve on the PC
         // closed the dialog and left the attempt pending until it expired (D34).
         if (sessionAgent is SessionAgentBridge bridge)
+        {
+            _bridge = bridge;
             bridge.PairingDecided += OnPairingDecided;
+        }
+        pairing.PairingCollected += OnPairingCollected;
 
         notifications.RaiseEvent("system", "PC is online", "The ESI Remote PC agent started.");
     }
@@ -240,6 +244,37 @@ public sealed class AgentHostedService(
             log.LogWarning("The desktop pairing decision could not be applied: {Reason}", ex.Message);
         }
     }
+
+    /// <summary>
+    /// Tells an open desktop prompt that the phone finally has its keys, so the window can close.
+    /// </summary>
+    /// <remarks>
+    /// The prompt deliberately stays up after approval, because the QR on it carries the only
+    /// copy of the provisioning secret (D36). Without this the dialog would sit there for the
+    /// rest of the pairing window even after a perfectly successful pairing, which reads as a
+    /// hang rather than as a job finished.
+    /// </remarks>
+    private void OnPairingCollected(object? sender, PairingAttempt attempt)
+    {
+        if (_bridge is null)
+            return;
+
+        if (!_bridge.NotifyPairingCompleted(attempt.PairingId))
+        {
+            // Not a problem: the session agent may not be running, in which case nobody was
+            // looking at the prompt and there is nothing to close.
+            log.LogDebug("No session agent to tell about pairing {PairingId} being collected", attempt.PairingId);
+        }
+    }
+
+    /// <summary>
+    /// The live session-agent bridge, when there is one.
+    /// <para>
+    /// Held because <see cref="OnPairingCollected"/> fires long after start-up, and it needs a
+    /// way to reach the session agent that is not a local pattern variable any more.
+    /// </para>
+    /// </summary>
+    private SessionAgentBridge? _bridge;
 
     private async Task RunAsync(CancellationToken ct)
     {

@@ -57,6 +57,13 @@ public sealed class PairingManager(
     public event EventHandler<PairingAttempt>? PairingResolved;
 
     /// <summary>
+    /// Raised the moment a phone holding the right provisioning secret takes its credentials -
+    /// the point at which a pairing attempt has actually become a pairing. Approval is not
+    /// that moment: a phone can be approved and still never collect (D36).
+    /// </summary>
+    public event EventHandler<PairingAttempt>? PairingCollected;
+
+    /// <summary>
     /// The HTTPS port the agent listens on, used to build the polling URL.
     /// <para>
     /// Injected rather than read from settings so the URL is built from the port that is
@@ -393,6 +400,11 @@ public sealed class PairingManager(
         var wrapped = EsiCrypto.Seal(plaintext, provisioningKey, aad);
 
         log.LogInformation("Released the pairing secrets for {DeviceId} to {Device}", device.DeviceId, device.Name);
+
+        // The phone is now paired, and the desktop prompt that has been waiting on it can go.
+        // Nothing else in the service knows when this happens - only this method does - so the
+        // announcement is raised here rather than left for a caller to remember.
+        PairingCollected?.Invoke(this, attempt);
 
         return new PairStatusResponse
         {

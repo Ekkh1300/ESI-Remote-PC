@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Esi.Platform.Session;
 using Serilog;
 using Serilog.Core;
@@ -27,6 +28,16 @@ internal sealed class SessionAgentRuntime : ApplicationContext
     private readonly Esi.Platform.Input.InputInjector _injector;
     private readonly CapturePump _capturePump;
     private readonly InputPump _inputPump;
+
+    /// <summary>
+    /// Pairing attempts whose phone has taken its credentials, keyed by attempt id.
+    /// <para>
+    /// A prompt outliving its approval is what made this necessary, and it is also what makes a
+    /// plain flag wrong: the service can learn that a phone has collected before the prompt for
+    /// that attempt has finished being constructed. Additions, so the news survives that race.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, int> _collectedPairings = new();
     private readonly CancellationTokenSource _stopping = new();
 
     private NotifyIcon? _tray;
@@ -236,6 +247,12 @@ internal sealed class SessionAgentRuntime : ApplicationContext
                 await ShowPairingPromptAsync(command).ConfigureAwait(false);
                 break;
 
+            case SessionChannelProtocol.Commands.PairingCompleted:
+                // Not answered with a CommandResult: the service already knows, having released
+                // the secrets itself, and a reply would only be a second thing to correlate.
+                NotePairingCollected(command.CorrelationId);
+                break;
+
             case SessionChannelProtocol.Commands.LaunchApp:
                 await LaunchAsync(command).ConfigureAwait(false);
                 break;
@@ -385,11 +402,16 @@ internal sealed class SessionAgentRuntime : ApplicationContext
 
         var result = new TaskCompletionSource<PairingDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // The phone's arrival is announced on this channel (D36). Registered before the dialog is
+        // built so a phone that is quick enough to collect while the form is still being shown is
+        // not lost: NotifyPairingCompleted sets the flag and the form's next tick closes it.
+        _collectedPairings.AddOrUpdate(request.PairingId, 0, (_, was) => was + 1);
+
         void Present()
         {
             try
             {
-                using var form = new PairingPromptForm(request);
+                using var form = new PairingPromptForm(request, () => WasCollected(request.PairingId));
                 form.ShowDialog();
                 // Read after the dialog has closed, never before. `PairingPromptForm.Decision`
                 // starts life as TimedOut, so completing the task with the value it holds at
@@ -422,6 +444,33 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         return CompletePromptAsync(command, request, result.Task);
     }
 
+    /// <summary>
+    /// Records that the phone holding an attempt's provisioning secret has taken its credentials.
+    /// </summary>
+    /// <remarks>
+    /// Counted rather than flagged, because a pairing can be approved twice over its life — once
+    /// through this channel and once by a console — and a message that arrived before the dialog
+    /// was raised must not be forgotten. The count is dropped when the attempt is finally
+    /// resolved, so the table cannot grow without bound.
+    /// </remarks>
+    private void NotePairingCollected(string? pairingId)
+    {
+        if (string.IsNullOrWhiteSpace(pairingId))
+        {
+            _log.Warning("The service reported a completed pairing with no attempt id; ignoring it");
+            return;
+        }
+
+        _collectedPairings.AddOrUpdate(pairingId, 1, (_, was) => was + 1);
+        _log.Information("The phone collected the credentials for pairing {PairingId}", pairingId);
+    }
+
+    /// <summary>Whether the phone for this attempt has taken its credentials.</summary>
+    private bool WasCollected(string pairingId)
+        => _collectedPairings.TryGetValue(pairingId, out var count) && count > 0;
+
+    private void ForgetPairing(string pairingId) => _collectedPairings.TryRemove(pairingId, out _);
+
     private async Task CompletePromptAsync(SessionCommandEnvelope command, PairingPromptRequest request,
         Task<PairingDecision> decision)
     {
@@ -431,6 +480,17 @@ internal sealed class SessionAgentRuntime : ApplicationContext
             .ConfigureAwait(false);
 
         var answer = completed == decision ? await decision.ConfigureAwait(false) : PairingDecision.TimedOut;
+
+        try
+        {
+            // Dropped here, after the answer is on the wire. A phone whose credentials were
+            // released has nothing more to say, and the attempt is over either way.
+            ForgetPairing(request.PairingId);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Could not clear the collected state for pairing {PairingId}", request.PairingId);
+        }
 
         await _channel.SendAsync(new SessionAgentMessage
         {

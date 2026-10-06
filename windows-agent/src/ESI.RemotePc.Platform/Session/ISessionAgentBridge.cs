@@ -79,8 +79,24 @@ public interface ISessionAgentBridge
     /// <summary>Asks the session agent to stop any active screen stream.</summary>
     bool StopCapture(string deviceId);
 
-    /// <summary>Asks the session agent to show the pairing approval prompt.</summary>
+    /// <summary>
+    /// Asks the session agent to show the pairing approval prompt.
+    /// </summary>
+    /// <remarks>
+    /// The prompt outlives its own approval on purpose. The QR on it is the only copy of the
+    /// provisioning secret, and the secret is what the phone still needs <i>after</i> Allow is
+    /// clicked - so closing the dialog there destroyed the transfer and left an approved pairing
+    /// the phone could never complete (D36). The dialog stays up until this call says the phone
+    /// has collected its keys, or until the window's deadline passes.
+    /// </remarks>
     bool ShowPairingPrompt(PairingPromptRequest request);
+
+    /// <summary>
+    /// Tells the session agent that the phone holding <paramref name="pairingId"/>'s secret has
+    /// collected its credentials, so an open prompt for that attempt has served its purpose and
+    /// can close. A no-op when no prompt is open, or when the agent is not connected.
+    /// </summary>
+    bool NotifyPairingCompleted(string pairingId);
 
     /// <summary>Asks the session agent to launch an application on the interactive desktop.</summary>
     bool TrySendLaunch(string appId, string executable, string commandLine, string? workingDirectory, bool elevated);
@@ -231,6 +247,13 @@ public sealed class SessionCommandEnvelope
     public int? GridCols { get; set; }
     public int? GridRows { get; set; }
     public PairingPromptRequest? Prompt { get; set; }
+
+    /// <summary>
+    /// Correlates a follow-up with the request it answers - the pairing attempt id for
+    /// <see cref="SessionChannelProtocol.Commands.PairingCompleted"/>, so a prompt can tell
+    /// whether the news is about the attempt it is showing.
+    /// </summary>
+    public string? CorrelationId { get; set; }
     public string? Command { get; set; }
     public string? Arguments { get; set; }
     public string? WorkingDirectory { get; set; }
@@ -253,6 +276,7 @@ public static class SessionChannelProtocol
         public const string CaptureStart = "capture.start";
         public const string CaptureStop = "capture.stop";
         public const string PairingPrompt = "pairing.prompt";
+        public const string PairingCompleted = "pairing.completed";
         public const string LaunchApp = "app.launch";
         public const string TerminateApp = "app.terminate";
         public const string ShowToast = "toast.show";

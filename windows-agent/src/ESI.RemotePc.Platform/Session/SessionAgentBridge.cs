@@ -530,6 +530,21 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
             Prompt = request,
         });
 
+    /// <summary>
+    /// Tells an open pairing prompt that the phone has its keys, so the dialog can close.
+    /// </summary>
+    /// <remarks>
+    /// Sent on the same channel as the prompt rather than inferred from the window: the session
+    /// agent owns the dialog, and only it can say when that dialog has nothing left to do.
+    /// <c>CorrelationId</c> carries the pairing id, matching the reply the prompt sends back.
+    /// </remarks>
+    public bool NotifyPairingCompleted(string pairingId)
+        => Send(new SessionCommandEnvelope
+        {
+            T = SessionChannelProtocol.Commands.PairingCompleted,
+            CorrelationId = pairingId,
+        });
+
     public bool TrySendLaunch(string appId, string executable, string commandLine, string? workingDirectory, bool elevated)
         => Send(new SessionCommandEnvelope
         {

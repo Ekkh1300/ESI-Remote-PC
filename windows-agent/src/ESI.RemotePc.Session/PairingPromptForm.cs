@@ -29,12 +29,23 @@ internal sealed class PairingPromptForm : Form
     private readonly PairingPromptRequest _request;
     private readonly Label _codeLabel;
     private readonly Label _countdownLabel;
+    private readonly Label _hint;
+    private readonly Button _approve;
+    private readonly Button _deny;
+    private readonly Func<bool>? _phoneCollected;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly DateTimeOffset _deadline;
 
-    public PairingPromptForm(PairingPromptRequest request)
+    /// <param name="request">The attempt being decided.</param>
+    /// <param name="phoneCollected">
+    /// Returns true once the phone holding this attempt's provisioning secret has taken its
+    /// credentials. Consulted only after approval: the dialog stays open until it says yes or
+    /// the window's deadline passes.
+    /// </param>
+    public PairingPromptForm(PairingPromptRequest request, Func<bool>? phoneCollected = null)
     {
         _request = request;
+        _phoneCollected = phoneCollected;
         _deadline = DateTimeOffset.Now.AddSeconds(Math.Max(30, request.ExpiresInSeconds));
 
         Text = "ESI Remote PC - pairing request";
@@ -102,19 +113,22 @@ internal sealed class PairingPromptForm : Form
             ForeColor = Color.FromArgb(150, 158, 174),
         };
 
-        var hint = new Label
+        // Says what to do next rather than only how to be careful. A phone that has been
+        // approved still has to fetch its keys, and the one place the key is - the QR above -
+        // disappears with this window, so the order of operations is part of the message.
+        _hint = new Label
         {
-            Text = "Approve only if you started this on the phone in front of you.",
+            Text = "Approve only if you started this on the phone in front of you.\r\n" +
+                   "Scan the code above on the phone, then allow this device.",
             AutoSize = false,
-            Bounds = new Rectangle(24, 250, 492, 20),
+            Bounds = new Rectangle(24, 248, 492, 38),
             ForeColor = Color.FromArgb(150, 158, 174),
             Font = new Font("Segoe UI", 8.5F),
         };
 
-        var approve = new Button
+        _approve = new Button
         {
             Text = "Allow this device",
-            DialogResult = DialogResult.Yes,
             Size = new Size(170, 34),
             Location = new Point(246, 330),
             BackColor = Color.FromArgb(28, 120, 160),
@@ -122,28 +136,27 @@ internal sealed class PairingPromptForm : Form
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI Semibold", 9.5F),
         };
-        approve.FlatAppearance.BorderSize = 0;
-        approve.Click += (_, _) => Decide(PairingDecision.Approved);
+        _approve.FlatAppearance.BorderSize = 0;
+        _approve.Click += (_, _) => Approve();
 
-        var deny = new Button
+        _deny = new Button
         {
             Text = "Deny",
-            DialogResult = DialogResult.No,
             Size = new Size(104, 34),
             Location = new Point(424, 330),
             BackColor = Color.FromArgb(48, 52, 64),
             ForeColor = Color.FromArgb(220, 226, 236),
             FlatStyle = FlatStyle.Flat,
         };
-        deny.FlatAppearance.BorderSize = 0;
-        deny.Click += (_, _) => Decide(PairingDecision.Denied);
+        _deny.FlatAppearance.BorderSize = 0;
+        _deny.Click += (_, _) => Decide(PairingDecision.Denied);
 
-        Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, hint, qr, deny, approve]);
+        Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, qr, _deny, _approve]);
 
         // Deny is the default, so a stray Enter - or a phone-triggered "approve" the user did
         // not read - cannot grant access.
-        AcceptButton = approve;
-        CancelButton = deny;
+        AcceptButton = _approve;
+        CancelButton = _deny;
 
         _timer = new System.Windows.Forms.Timer { Interval = 1000 };
         _timer.Tick += (_, _) => Tick();
@@ -216,23 +229,100 @@ internal sealed class PairingPromptForm : Form
     /// <summary>The answer, valid once the dialog has closed.</summary>
     public PairingDecision Decision { get; private set; } = PairingDecision.TimedOut;
 
+    /// <summary>True while the form is up holding an approved attempt open for the phone.</summary>
+    internal bool WaitingForPhone => _waitingForPhone;
+
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
         Tick();
     }
 
+    /// <summary>
+    /// Records the approval and then <i>stays on screen</i>.
+    /// </summary>
+    /// <remarks>
+    /// This is D36, and it is the whole defect: the dialog used to call <c>Close()</c> here,
+    /// which is the natural thing to write and the wrong thing to do. The QR on this window is
+    /// the only copy of the provisioning secret, and the secret is precisely what the phone
+    /// still lacks at this moment - it has asked, it is waiting, and it cannot be trusted with
+    /// the secret over the network. So approving destroyed the transfer, the phone polled for
+    /// 35 seconds with nothing to prove itself with, and the pairing could never complete. On a
+    /// real phone that looked like a plain "nothing happened" (the agent logs 35
+    /// <c>polled without a valid provisioning secret</c> warnings and gives up).
+    /// <para>
+    /// The order that works is scan-then-allow, and it is also the order the hint now states.
+    /// Approve-then-scan is still supported, because this window does not close on approval: it
+    /// turns into a "waiting for the phone" state, keeps the QR up, and closes by itself the
+    /// moment <see cref="phoneCollected"/> goes true.
+    /// </para>
+    /// </remarks>
+    private void Approve()
+    {
+        _decided = true;
+        _waitingForPhone = true;
+        Decision = PairingDecision.Approved;
+
+        _approve.Visible = false;
+        _deny.Visible = false;
+        AcceptButton = null;
+        CancelButton = null;
+
+        // Green, not the cyan of the six-digit code: this is a different phase of the same
+        // attempt, and the change of colour is what makes that visible without reading the text.
+        var approved = Color.FromArgb(126, 231, 155);
+
+        _hint.Text = "Allowed. Scan the code above on the phone to finish.\r\n" +
+                     "This window closes by itself once the phone is connected.";
+        _hint.ForeColor = approved;
+        _countdownLabel.ForeColor = approved;
+        _codeLabel.ForeColor = approved;
+        Text = "ESI Remote PC - waiting for the phone";
+
+        // Still the same deadline, so a phone that never scans cannot leave the dialog up for
+        // ever: Tick() closes it when the window runs out.
+    }
+
     private void Tick()
     {
         var remaining = _deadline - DateTimeOffset.Now;
 
+        if (_waitingForPhone && TryPhoneCollected())
+        {
+            _waitingForPhone = false;
+            Close();
+            return;
+        }
+
         if (remaining <= TimeSpan.Zero)
         {
+            _waitingForPhone = false;
             Decide(PairingDecision.TimedOut);
             return;
         }
 
-        _countdownLabel.Text = $"Expires in {remaining.TotalSeconds:0}s";
+        _countdownLabel.Text = _waitingForPhone
+            ? $"Waiting for the phone - closes in {remaining.TotalSeconds:0}s"
+            : $"Expires in {remaining.TotalSeconds:0}s";
+    }
+
+    /// <summary>
+    /// Asks whether the phone has taken its credentials, treating a failure to tell as "not
+    /// yet". A closed window is the right answer either way, so there is nothing to recover.
+    /// </summary>
+    private bool TryPhoneCollected()
+    {
+        if (_phoneCollected is null)
+            return false;
+
+        try
+        {
+            return _phoneCollected();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private void Decide(PairingDecision decision)
@@ -249,11 +339,18 @@ internal sealed class PairingPromptForm : Form
     }
 
     private bool _decided;
+    private bool _waitingForPhone;
 
+    /// <summary>
+    /// A phone that has been approved has already had its decision recorded, so closing this
+    /// window afterwards - with the X, Alt+F4, a session change, or the phone's arrival - is not
+    /// a denial and must not be turned into one. Before approval every other way out is still
+    /// a denial: an unattended approval is strictly worse than an unattended refusal.
+    /// </summary>
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        // Any other way out — the X, Alt+F4, a session change — is a denial. An unattended
-        // approval is strictly worse than an unattended refusal.
+        _waitingForPhone = false;
+
         if (!_decided)
             Decision = PairingDecision.Denied;
 

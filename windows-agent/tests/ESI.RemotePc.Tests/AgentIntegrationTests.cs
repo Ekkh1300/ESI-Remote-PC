@@ -870,6 +870,66 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
         Assert.Equal(HttpStatusCode.OK, probeResponse.StatusCode);
     }
 
+    // D36 - approving must not consume the only copy of the provisioning secret
+    [Fact]
+    public async Task An_approved_pairing_announces_itself_only_once_the_phone_has_its_keys()
+    {
+        var pairingManager = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+
+        var collected = new List<string>();
+        pairingManager.PairingCollected += (_, attempt) => collected.Add(attempt.PairingId);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/pair/request")
+        {
+            Content = new StringContent(
+                """{"deviceName":"D36","platform":"android"}""", Encoding.UTF8, "application/json"),
+        };
+
+        using var created = await Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        string pairingId, userCode;
+        using (var document = JsonDocument.Parse(await created.Content.ReadAsStringAsync()))
+        {
+            pairingId = document.RootElement.GetProperty("pairingId").GetString()!;
+            userCode = document.RootElement.GetProperty("userCode").GetString()!;
+        }
+
+        // Approving is not the end of the pairing. The phone has still never seen the secret,
+        // and if the prompt's disappearance took the QR with it then this attempt can never
+        // finish - which is exactly what the real phone did: 35 polls, no secret, no device.
+        pairingManager.Approve(pairingId, Esi.Core.Security.PairingManager.DefaultScopes);
+
+        Assert.Empty(collected);
+
+        // Polling without the secret is refused, exactly as before the fix - the fix is about the
+        // dialog surviving approval, not about weakening who may collect. The refusal is in the
+        // body rather than the status code: the endpoint answers 200 with status "error" so a
+        // phone that polls on the wrong scheme is not told the attempt does not exist.
+        using var blind = await Client.GetAsync($"/api/v1/pair/session?id={pairingId}");
+        var blindBody = await blind.Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("wrappedSecrets", blindBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"status\":\"approved\"", blindBody, StringComparison.Ordinal);
+        Assert.Empty(collected);
+
+        // Now the phone scans the code on the PC and collects. This is the moment the desktop
+        // prompt has been waiting for, and the only moment it is safe to close it.
+        var attempt = pairingManager.Get(pairingId)!;
+        var secret = ExtractSecret(pairingManager.BuildPollingUrl(attempt, "127.0.0.1", pairingManager.Port));
+        Assert.NotNull(secret);
+
+        using var poll = new HttpRequestMessage(
+            HttpMethod.Get, $"/api/v1/pair/session?id={pairingId}&secret={Uri.EscapeDataString(secret!)}");
+
+        using var polled = await Client.SendAsync(poll);
+        Assert.Equal(HttpStatusCode.OK, polled.StatusCode);
+        Assert.Contains("\"status\":\"approved\"", await polled.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        Assert.Equal([pairingId], collected);
+    }
+
     [Fact]
     public async Task A_phone_without_the_provisioning_secret_gets_no_credentials()
     {
