@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  E427C4220C73F45722E4EC2D8E836AEA093A127E9CDD2A5A76F0E895BEE801D3
+ESI-RemotePC-Setup-1.0.0-x64.exe  957126B9F6D4D4DD0E0EC61FF42825380E10D3AB3E7666F3EBC8EAC68A3F3309
 ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA5
 ```
 
@@ -520,3 +520,24 @@ approve-then-scan both work.
 
 The attempt also left a paired device that could never authenticate, holding one of the eight
 slots. esirc pair list showed it as LAST SEEN never. Revoked.
+## D37 - the QR was drawn on fractional pixels, so no camera could read it
+
+The phone reported that it had camera permission and could not find the code. The matrix was
+correct throughout; the rendering was not.
+
+A scanner samples module centres and measures the distance between transitions, so both need a
+square grid - every module the same whole number of pixels across. Neither rendering provided
+one:
+
+- the desktop prompt drew 53 cells (45 modules plus the quiet zone, which is what a ~120 character
+  polling URL needs) at 4 pixels each into 212 px, then squeezed the result into the 150 px the
+  layout asked for. 150/53 is 2.83, so half the module boundaries fell on a fractional pixel
+- the pairing page pinned width="240", leaving the browser to fit 53 cells into 240 px - 4.528
+  each
+
+Both now draw at 6 pixels per module and are placed at that size with no rescale. QrRenderabilityTests
+reconstructs what a scanner sees - all three finder patterns, the pitch derived from them, the
+1:1:3:1:1 signature sampled at module centres - and asserts the old rendering is unreadable, so
+the suite cannot pass by being lenient.
+
+The APK is unchanged. The camera was never the problem and the phone needs no new build.
