@@ -576,3 +576,24 @@ The prompt drops the QR entirely when there is nothing to transfer, and says so:
 matches the one on your phone."
 
 **The APK has changed.** Install it once; after that no QR code is involved in pairing at all.
+## Final verification
+
+Run on the emulator against the live agent, through the app's own UI, with the shipped APK:
+
+    Pairing requested by Android phone from 127.0.0.1; code 945911, secret supplied by the requester
+    Paired Android phone as a26aa882c6b329fd
+    Released the pairing secrets for a26aa882c6b329fd
+
+and on the phone: Waiting for approval on the PC / 945 911 / no Scan and no Paste anywhere
+on the pairing screen, then Paired. Every signed endpoint the app touched afterwards returned
+200 - /auth/whoami, /system/info, /power/status, /apps, /notifications - and the
+dashboard reported Live, the Power tab reported online - E-K\META PC, and the Apps tab listed
+the catalog. No scan, no camera, one click on the PC.
+
+189 C# tests, 165 Dart tests, lutter analyze clean, publish smoke test 19 of 19. elease\
+holds exactly one .exe and one .apk and both hashes match this file. The three installed
+binaries are byte-identical to the shipped build.
+
+One device is still paired: 26aa882c6b329fd, the emulator that ran this. It cannot
+authenticate from anywhere real, and seven of the eight slots are free. To remove it:
+stop the agent, esirc pair revoke a26aa882c6b329fd, start it again.
