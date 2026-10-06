@@ -48,12 +48,17 @@ internal sealed class PairingPromptForm : Form
         _phoneCollected = phoneCollected;
         _deadline = DateTimeOffset.Now.AddSeconds(Math.Max(30, request.ExpiresInSeconds));
 
+        // Whether there is anything to transfer decides the whole shape of the window: no secret
+        // to hand over means no QR, a shorter form, and different wording on both buttons' story
+        // (D39). A current phone always lands in the false branch.
+        var needsQr = !string.IsNullOrWhiteSpace(request.PollingUrl);
+
         Text = "ESI Remote PC - pairing request";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(560, 400);
+        ClientSize = new Size(560, needsQr ? 400 : 300);
         BackColor = Color.FromArgb(20, 22, 28);
         ForeColor = Color.FromArgb(228, 232, 240);
         Font = new Font("Segoe UI", 9F);
@@ -81,18 +86,26 @@ internal sealed class PairingPromptForm : Form
             ForeColor = Color.FromArgb(190, 198, 214),
         };
 
-        // The QR is the actual transfer. Without it the phone can never obtain the
-        // provisioning secret, and a pairing approved here would sit approved forever with
-        // the phone polling for credentials that are never released.
-        // The QR is the transfer, so it is given real estate rather than a decorative corner. A
-        // 212-pixel code scanned from a desk needs about a third of a form's width; 150 pixels
-        // of it was the difference between "the camera cannot see it" and "the phone paired".
-        var qr = RenderQr(request.PollingUrl, 190);
-        qr.Location = new Point(320, 46);
+        // A QR only when there is something to transfer (D39). A current phone brings its own
+        // secret, so the prompt has nothing to hand over and no picture is drawn at all - which
+        // is what stops a pairing stalling on a phone whose camera cannot read a code. The code
+        // below is still shown either way: it is how the user tells this prompt from any other.
+        Control? qr = null;
+        if (needsQr)
+        {
+            // Given real estate rather than a decorative corner. A 212-pixel code scanned from a
+            // desk needs about a third of a form's width; 150 pixels of it was the difference
+            // between "the camera cannot see it" and "the phone paired".
+            var picture = RenderQr(request.PollingUrl!, 190);
+            picture.Location = new Point(320, 46);
+            qr = picture;
+        }
 
         var codeCaption = new Label
         {
-            Text = "Scan this with the phone, or type the code shown on it:",
+            Text = needsQr
+                ? "Scan this with the phone, or type the code shown on it:"
+                : "The phone is showing this code. Allow only if it matches.",
             AutoSize = false,
             Bounds = new Rectangle(24, 140, 300, 32),
             ForeColor = Color.FromArgb(190, 198, 214),
@@ -116,13 +129,18 @@ internal sealed class PairingPromptForm : Form
             ForeColor = Color.FromArgb(150, 158, 174),
         };
 
-        // Says what to do next rather than only how to be careful. A phone that has been
-        // approved still has to fetch its keys, and the one place the key is - the QR above -
-        // disappears with this window, so the order of operations is part of the message.
+        // Says what to do next rather than only how to be careful. When there is a QR, the phone
+        // still has to fetch its keys and the only place the key is disappears with this
+        // window, so the order of operations is part of the message. When there is not, the
+        // whole job is to make the user compare the code, because that comparison is the
+        // entire verification now.
         _hint = new Label
         {
-            Text = "Approve only if you started this on the phone in front of you.\r\n" +
-                   "Scan the code above on the phone, then allow this device.",
+            Text = needsQr
+                ? "Approve only if you started this on the phone in front of you.\r\n" +
+                  "Scan the code above on the phone, then allow this device."
+                : "Approve only if this code matches the one on your phone.\r\n" +
+                  "If you did not start this, choose Deny.",
             AutoSize = false,
             Bounds = new Rectangle(24, 248, 492, 38),
             ForeColor = Color.FromArgb(150, 158, 174),
@@ -154,7 +172,10 @@ internal sealed class PairingPromptForm : Form
         _deny.FlatAppearance.BorderSize = 0;
         _deny.Click += (_, _) => Decide(PairingDecision.Denied);
 
-        Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, qr, _deny, _approve]);
+        if (qr is not null)
+            Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, qr, _deny, _approve]);
+        else
+            Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, _deny, _approve]);
 
         // Deny is the default, so a stray Enter - or a phone-triggered "approve" the user did
         // not read - cannot grant access.
@@ -324,8 +345,11 @@ internal sealed class PairingPromptForm : Form
         // attempt, and the change of colour is what makes that visible without reading the text.
         var approved = Color.FromArgb(126, 231, 155);
 
-        _hint.Text = "Allowed. Scan the code above on the phone to finish.\r\n" +
-                     "This window closes by itself once the phone is connected.";
+        _hint.Text = string.IsNullOrWhiteSpace(_request.PollingUrl)
+            ? "Allowed. The phone is collecting its keys.\r\n" +
+              "This window closes by itself as soon as it does."
+            : "Allowed. Scan the code above on the phone to finish.\r\n" +
+              "This window closes by itself once the phone is connected.";
         _hint.ForeColor = approved;
         _countdownLabel.ForeColor = approved;
         _codeLabel.ForeColor = approved;

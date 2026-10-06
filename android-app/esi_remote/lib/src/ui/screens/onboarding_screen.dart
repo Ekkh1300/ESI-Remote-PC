@@ -1117,8 +1117,6 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
           progress: progress!,
           request: request,
           onCancel: () => _confirmCancel(context),
-          onScan: _scanSecret,
-          onPaste: _pasteSecret,
         );
       case PairingPhase.done:
         return _Done(
@@ -1147,62 +1145,6 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
     ref.read(pairingFlowProvider.notifier).cancel();
   }
 
-  /// Scans the QR the PC shows while this attempt is running.
-  Future<void> _scanSecret() async {
-    final raw = await Navigator.of(context).push<String>(
-      MaterialPageRoute<String>(builder: (_) => const QrScannerScreen()),
-    );
-    if (raw == null || !mounted) return;
-    _adoptSecret(raw);
-  }
-
-  Future<void> _pasteSecret() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final raw = data?.text?.trim();
-    if (!mounted) return;
-    if (raw == null || raw.isEmpty) {
-      _say('There is nothing on the clipboard to paste.');
-      return;
-    }
-    _adoptSecret(raw);
-  }
-
-  /// Takes the one-time secret off a scanned or pasted QR and hands it to the attempt that
-  /// is already running.
-  ///
-  /// This deliberately does *not* start a second attempt. The secret is minted per attempt,
-  /// so a fresh request would carry a different one and the unwrap would fail - and §5.4 has
-  /// the agent mark the attempt consumed before it tries, so a mismatch burns the code.
-  void _adoptSecret(String raw) {
-    final result = PairingQr.parse(raw);
-    if (!result.isSuccess) {
-      _say(result.error ?? 'That QR code could not be read.');
-      return;
-    }
-
-    final payload = result.payload!;
-    if (!payload.hasSecret) {
-      _say(
-        'That code carries no pairing secret, so the PC will release no credentials. '
-        'Scan the QR the PC shows while this screen is waiting.',
-      );
-      return;
-    }
-
-    ref
-        .read(pairingFlowProvider.notifier)
-        .adoptSecret(Uint8List.fromList(payload.provisioningSecretBytes));
-    _say('Pairing secret read. The PC releases the credentials once it approves.');
-  }
-
-  void _say(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(content: Text(message), duration: const Duration(seconds: 6)),
-      );
-  }
 
   Future<void> _finishAndOpen() async {
     if (_stored) return;
@@ -1228,15 +1170,11 @@ class _Waiting extends StatelessWidget {
     required this.progress,
     required this.request,
     required this.onCancel,
-    required this.onScan,
-    required this.onPaste,
   });
 
   final PairingProgress progress;
   final PairingRequest request;
   final VoidCallback onCancel;
-  final VoidCallback onScan;
-  final VoidCallback onPaste;
 
   @override
   Widget build(BuildContext context) {
@@ -1291,38 +1229,17 @@ class _Waiting extends StatelessWidget {
                     style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
                   ),
                 ],
-                // The PC mints the one-time secret while handling the request that started
-                // this attempt, so it could not have been supplied when the attempt began.
-                // The QR on the approval prompt - or on /pairing?code=… - is where it comes
-                // back, and until this phone holds it the PC approves but releases nothing.
-                if (!request.hasSecret && progress.phase != PairingPhase.decrypting) ...<Widget>[
+                // Nothing to scan any more (D39). This phone created the one-time secret
+                // and sent it with the request, so the PC has nothing left to hand over -
+                // the only thing left for the user to do is compare the code above with the
+                // one on the PC's prompt and click Allow there.
+                if (progress.phase != PairingPhase.decrypting) ...<Widget>[
                   const SizedBox(height: EsiSpace.lg),
                   Text(
-                    'The PC will approve this code, then keep the credentials until it sees '
-                    'the one-time secret from its own QR code. When the prompt on the PC '
-                    'shows a QR, scan it here.',
+                    'Check that the code above matches the one in the prompt on the PC, then '
+                    'press Allow this device there. That is the whole job.',
                     textAlign: TextAlign.center,
                     style: EsiType.body.copyWith(color: EsiPalette.faint, fontSize: 12),
-                  ),
-                  const SizedBox(height: EsiSpace.sm),
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: onScan,
-                          icon: const Icon(Icons.qr_code_scanner, size: 18),
-                          label: const Text('Scan'),
-                        ),
-                      ),
-                      const SizedBox(width: EsiSpace.sm),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onPaste,
-                          icon: const Icon(Icons.content_paste, size: 17),
-                          label: const Text('Paste'),
-                        ),
-                      ),
-                    ],
                   ),
                 ],
               ],

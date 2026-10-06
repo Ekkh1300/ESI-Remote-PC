@@ -36,6 +36,33 @@ public sealed class PairRequest
     [JsonPropertyName("osVersion")] public string? OsVersion { get; set; }
     [JsonPropertyName("appVersion")] public string? AppVersion { get; set; }
     [JsonPropertyName("publicSpkiSha256")] public string? PublicSpkiSha256 { get; set; }
+
+    /// <summary>
+    /// A one-time secret the requester has already chosen, base64url.
+    /// <para>
+    /// Optional, and the reason pairing no longer needs a QR code. A phone that sends this
+    /// already holds the only value that will ever unlock its credentials, so nothing has to be
+    /// handed to it out of band: the human compares the six-digit code on the agent's prompt
+    /// with the one already on the phone's own screen, clicks Allow, and the phone collects.
+    /// See <c>PairingManager.Create</c> for why that is safe.
+    /// </para>
+    /// <para>
+    /// Absent means an older client, which is served the previous way - the agent mints the
+    /// secret and puts it on the desktop prompt for the user to transfer.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("nonce")] public string? Nonce { get; set; }
+
+    /// <summary>
+    /// The six-digit code the requester is displaying.
+    /// <para>
+    /// Only meaningful alongside <see cref="Nonce"/>. The agent uses the requester's code rather
+    /// than generating one so both screens show the same digits without either side needing to
+    /// know a derivation. It is a human-comparison token and nothing more: no security rests on
+    /// it, because <see cref="Nonce"/> is what actually gates the release.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("userCode")] public string? UserCode { get; set; }
 }
 
 /// <summary>Body of <c>POST /api/v1/pair/request</c> response (HTTP 201).</summary>

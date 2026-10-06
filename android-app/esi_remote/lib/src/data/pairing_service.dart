@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../net/esi_api.dart';
@@ -99,13 +100,13 @@ class PairingService {
   /// [onProgress] is called on every state change so the UI can narrate; the returned
   /// future completes when the attempt reaches a terminal state.
   ///
-  /// [provisioningSecret] is read on every poll rather than captured, because the secret
-  /// does not exist when the attempt starts: the PC mints it and hands it out on a QR shown
-  /// after the request. A phone that polls before scanning simply gets no credentials yet.
+  /// The one-time secret is created here and sent with the request, so nothing has to be
+  /// transferred from the PC afterwards and no QR code is involved (D39). A caller that used
+  /// to hand in a secret it had scanned no longer supplies one; [secret] is now owned by this
+  /// flow end to end.
   Future<PairingProgress> pair({
     required EsiEndpoint endpoint,
     required String deviceName,
-    required Uint8List Function() provisioningSecret,
     String? osVersion,
     String? appVersion,
     required void Function(PairingProgress) onProgress,
@@ -122,7 +123,6 @@ class PairingService {
         api: api,
         endpoint: endpoint,
         deviceName: deviceName,
-        provisioningSecret: provisioningSecret,
         osVersion: osVersion,
         appVersion: appVersion,
         onProgress: onProgress,
@@ -138,7 +138,6 @@ class PairingService {
     required EsiApi api,
     required EsiEndpoint endpoint,
     required String deviceName,
-    required Uint8List Function() provisioningSecret,
     String? osVersion,
     String? appVersion,
     required void Function(PairingProgress) onProgress,
@@ -160,11 +159,31 @@ class PairingService {
         ? null
         : handshake.serverTime - (DateTime.now().millisecondsSinceEpoch ~/ 1000);
 
+    // The one-time secret is minted *here*, before the request, and sent with it (D39).
+    //
+    // It used to be minted by the agent and handed to the phone out of band - as a QR code on
+    // the approval prompt - which meant pairing could not start without a working camera: two
+    // rounds of scanning, and on a phone whose camera would not read a code the whole thing
+    // simply stalled. Now the secret already exists where it has to be, so nothing has to be
+    // transferred and the user only has to click Allow.
+    //
+    // This does not weaken the agent. It still releases the credentials only to a poll bearing
+    // this exact secret, so a device on the LAN that merely triggers a prompt still cannot
+    // collect them. What the user compares by eye is the six-digit code, which the agent echoes
+    // back and which the phone is already displaying.
+    final secret = EsiCrypto.randomBytes(32);
+
+    // The code the human compares. It is chosen here and sent with the request, so the agent
+    // can echo it back and both screens show the same digits without either side having to know
+    // a derivation. It carries no authority of its own - the secret above is what gates the
+    // release - so picking any six digits is fine.
+    final userCode = makeUserCode();
+
     PairRequestResult created;
 
     try {
       onProgress(const PairingProgress(phase: PairingPhase.requesting));
-      created = await _request(api, deviceName, osVersion, appVersion);
+      created = await _request(api, deviceName, osVersion, appVersion, secret, userCode);
     } on EsiApiException catch (e) {
       final progress = _failure(e.displayMessage);
       onProgress(progress);
@@ -233,7 +252,7 @@ class PairingService {
 
       final PairStatus status;
       try {
-        status = await _poll(api, created.pairingId, provisioningSecret());
+        status = await _poll(api, created.pairingId, secret);
       } on EsiApiException catch (e) {
         // A single failed poll is not fatal: the phone may have moved between access
         // points. Keep trying until the window closes, but remember the last reason.
@@ -319,27 +338,6 @@ class PairingService {
         return consumed;
       }
 
-      // Once the PC approves, a poll carrying no secret comes back "error", because §5.4
-      // releases nothing to a phone that has not presented the one. That is not a failure:
-      // the agent does not consume the attempt when the secret is missing, so this is the
-      // cue to go and scan the QR, not a reason to give up. It only becomes fatal once the
-      // phone has a secret and still gets nothing.
-      if (status.status == 'error' && provisioningSecret().isEmpty) {
-        final awaitingSecret = PairingProgress(
-          phase: PairingPhase.awaitingApproval,
-          pairingId: created.pairingId,
-          userCode: created.userCode,
-          expiresAt: closesAtEpoch,
-          approvalMethod: created.approval,
-          deviceName: deviceName,
-          message: 'Approved on the PC, which is now holding the credentials until this '
-              'phone shows it the one-time secret. Scan the QR on the PC, or paste it, to '
-              'collect them.',
-        );
-        onProgress(awaitingSecret);
-        continue;
-      }
-
       if (!status.isApproved) {
         final failed = PairingProgress(
           phase: PairingPhase.failed,
@@ -368,8 +366,8 @@ class PairingService {
           phase: PairingPhase.failed,
           pairingId: created.pairingId,
           deviceName: deviceName,
-          error: 'The PC approved the pairing but did not release any credentials. This '
-              'usually means the QR code did not carry the pairing secret.',
+          error: 'The PC approved the pairing but did not release any credentials. '
+              'Start again to get a new code.',
         );
         onProgress(failed);
         return failed;
@@ -378,7 +376,7 @@ class PairingService {
       try {
         final opened = await EsiCrypto.openPairingEnvelope(
           envelope: WrappedSecretEnvelope.fromJson(envelopeJson.json),
-          provisioningSecret: provisioningSecret(),
+          provisioningSecret: secret,
           pairingId: created.pairingId,
           deviceId: deviceId,
         );
@@ -413,9 +411,16 @@ class PairingService {
     String deviceName,
     String? osVersion,
     String? appVersion,
+    Uint8List secret,
+    String userCode,
   ) async {
     // The pre-auth surface is not signed: everything under /api/v1/pair/ is on the
     // agent's public list and no key exists yet.
+    //
+    // `nonce` and `userCode` are what make pairing work without a QR code (D39). The agent
+    // adopts the secret rather than minting one, so there is nothing left to transfer out of
+    // band - which is all the prompt's QR used to be for, and what a phone's camera had to be
+    // able to read. The agent still releases the credentials only to a poll bearing it.
     final json = await api.postJson(
       '/pair/request',
       signed: false,
@@ -424,10 +429,22 @@ class PairingService {
         'platform': 'android',
         'osVersion': ?osVersion,
         'appVersion': ?appVersion,
+        'nonce': EsiCrypto.base64Url(secret),
+        'userCode': userCode,
       },
     );
     return PairRequestResult.fromJson(json);
   }
+
+  /// Six digits, matching the shape the agent would have generated, so the code this phone
+  /// shows and the code on the PC's prompt are directly comparable.
+  ///
+  /// Static and exposed so it can be tested: it is the only part of the nonce flow that is a
+  /// pure function, and "six digits, and not the same every time" is worth asserting rather
+  /// than assuming.
+  static String makeUserCode() => List<int>.generate(6, (_) => _rng.nextInt(10)).join();
+
+  static final Random _rng = Random.secure();
 
   Future<PairStatus> _poll(
     EsiApi api,

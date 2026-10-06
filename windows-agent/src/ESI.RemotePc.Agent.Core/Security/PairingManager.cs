@@ -64,6 +64,17 @@ public sealed class PairingManager(
     public event EventHandler<PairingAttempt>? PairingCollected;
 
     /// <summary>
+    /// The polling URL each live prompt was given, for <see cref="SessionPromptUrlFor"/>.
+    /// </summary>
+    /// <remarks>
+    /// Bounded by the attempts themselves: entries are dropped when an attempt resolves, so a
+    /// long-running agent cannot accumulate them. A test-only convenience otherwise, which is
+    /// why it is small and why it lives next to the code that raises the prompt rather than in a
+    /// separate fake.
+    /// </remarks>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _promptUrls = new();
+
+    /// <summary>
     /// The HTTPS port the agent listens on, used to build the polling URL.
     /// <para>
     /// Injected rather than read from settings so the URL is built from the port that is
@@ -86,6 +97,81 @@ public sealed class PairingManager(
     }
 
     /// <summary>Creates a pairing attempt and asks the session agent to prompt the user.</summary>
+    /// <summary>
+    /// Decides where this attempt's one-time secret comes from.
+    /// </summary>
+    /// <remarks>
+    /// A requester may supply its own 32-byte secret and its own six-digit code. When it does,
+    /// both are used verbatim and nothing has to be transferred to it later. When it does not -
+    /// an older client - the agent mints the secret itself and the desktop prompt carries it, and
+    /// the user transfers it by scanning. That fallback is why the QR code survived D36 and D37
+    /// being wrong about it, and it is kept because a phone on someone's desk should still be
+    /// able to pair against an agent that predates this.
+    /// </remarks>
+    /// <returns>The secret to store, and the code to show the human.</returns>
+    private (byte[] Secret, string UserCode) AdoptRequesterSecret(PairRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Nonce))
+            return (EsiCrypto.RandomBytes(ProtocolConstants.SecretLength), GenerateUserCode());
+
+        if (!TryDecodeBase64Url(request.Nonce, out var decoded) ||
+            decoded is null ||
+            decoded.Length != ProtocolConstants.SecretLength)
+        {
+            // Rejected rather than replaced. Silently minting a fresh secret here would hand the
+            // caller an attempt it can never unlock, and it would fail much later as a "polled
+            // without a valid provisioning secret" that looks like a networking problem.
+            throw new InvalidOperationException(
+                $"'nonce' must be {ProtocolConstants.SecretLength} bytes encoded as base64url.");
+        }
+
+        // The code is only a token for the human to compare between two screens, so it is held
+        // to the shape and nothing more. It is not derived from the secret and carries no
+        // authority: a caller can pick any six digits it likes, and choosing them is the point.
+        var code = Sanitise(request.UserCode ?? "", 8);
+
+        if (code.Length != 6 || code.Any(c => !char.IsAsciiDigit(c)))
+            code = GenerateUserCode();
+
+        return (decoded, code);
+    }
+
+    /// <summary>
+    /// The URL the last prompt for this attempt carried, or null when it carried none.
+    /// </summary>
+    /// <remarks>
+    /// Recorded rather than re-derived so a caller can assert on what the user was actually
+    /// shown. A prompt with no URL is the case D39 introduced: a requester that brought its own
+    /// secret has nothing to transfer, so nothing is drawn and no camera is involved.
+    /// </remarks>
+    public string? SessionPromptUrlFor(string pairingId)
+        => _promptUrls.TryGetValue(pairingId, out var url) ? url : null;
+
+    /// <summary>base64url, with the padding a URL may have dropped.</summary>
+    private static bool TryDecodeBase64Url(string value, out byte[]? bytes)
+    {
+        bytes = null;
+
+        var padded = value.Replace('-', '+').Replace('_', '/');
+        var remainder = padded.Length % 4;
+
+        if (remainder == 1)
+            return false; // Never a valid base64 length.
+
+        if (remainder != 0)
+            padded = padded.PadRight(padded.Length + (4 - remainder), '=');
+
+        try
+        {
+            bytes = Convert.FromBase64String(padded);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
     public (PairRequestResponse Response, string PairingId) Create(PairRequest request, string? remoteAddress)
     {
         var maxDevices = settings.Current.Security.MaxPairedDevices;
@@ -97,9 +183,22 @@ public sealed class PairingManager(
         var window = Math.Clamp(settings.Current.Security.PairingWindowSeconds, 30, 900);
         var expiresAt = now + window;
 
+        // A requester may bring its own one-time secret. When it does, the secret is already
+        // in the only place it has to be for the pairing to work, so there is nothing left to
+        // transfer out of band - which is all the desktop QR ever existed to do, and what a
+        // phone's camera had to be able to read.
+        //
+        // This is not a weakening of the old guarantee, it is the same guarantee pointing the
+        // other way. Before, the secret was minted here and released only to whoever the user
+        // physically handed it to. Now the requester minted it, and the agent still releases
+        // only to a poll bearing it. Either way an unrelated device on the LAN that merely
+        // triggers a prompt cannot collect, because it cannot produce the secret - and the
+        // six-digit code is what tells the human which prompt belongs to their phone.
+        var (secret, userCode) = AdoptRequesterSecret(request);
+
         var attempt = new PairingAttempt(
             PairingId: EsiCrypto.NewDeviceId(),
-            UserCode: GenerateUserCode(),
+            UserCode: userCode,
             DeviceName: Sanitise(request.DeviceName, 64),
             Platform: Sanitise(request.Platform, 32),
             OsVersion: request.OsVersion,
@@ -110,15 +209,15 @@ public sealed class PairingManager(
             ExpiresAt: expiresAt,
             ResolvedAt: null,
             ResolvedDeviceId: null,
-            // Shown to the human and encoded in the QR; never leaves the PC in the clear.
-            ProvisioningSecret: EsiCrypto.RandomBytes(ProtocolConstants.SecretLength),
+            ProvisioningSecret: secret,
             PublicPin: request.PublicSpkiSha256,
             SecretsDelivered: false);
 
         Insert(attempt);
 
-        log.LogInformation("Pairing requested by {Device} ({Platform}) from {Address}; code {Code}, expires at {Expires}",
-            attempt.DeviceName, attempt.Platform, remoteAddress, attempt.UserCode, expiresAt);
+        log.LogInformation("Pairing requested by {Device} ({Platform}) from {Address}; code {Code}, expires at {Expires}, secret {SecretSource}",
+            attempt.DeviceName, attempt.Platform, remoteAddress, attempt.UserCode, expiresAt,
+            string.IsNullOrWhiteSpace(request.Nonce) ? "minted here, to be transferred by the prompt" : "supplied by the requester");
 
         // Ask the interactive session to prompt the user. If nobody is logged on, the
         // attempt stays pending and the user approves on the pairing page, or from the CLI.
@@ -127,10 +226,26 @@ public sealed class PairingManager(
         // *requesting* address, because that is the host the phone can already reach. Using
         // the machine's own idea of its LAN address would produce a code the phone cannot
         // resolve when the two are on different interfaces.
+        // The QR goes on the prompt only when it is needed. A requester that brought its own
+        // secret already holds the only value that unlocks its credentials, so there is nothing
+        // to show it and nothing for a camera to read - which is the whole point of D39. An
+        // older client, which brought nothing, still gets the transfer.
+        var requesterBroughtItsOwnSecret = !string.IsNullOrWhiteSpace(request.Nonce);
+
+        var pollingUrl = requesterBroughtItsOwnSecret
+            ? null
+            : BuildPollingUrl(attempt, remoteAddress ?? "localhost", Port);
+
+        // Recorded whether or not anyone is there to see it, so what a caller asks about the
+        // attempt does not depend on whether a session happened to be logged on. Null is the
+        // D39 case and is exactly what that change is asserting on.
+        if (pollingUrl is null)
+            _promptUrls.TryRemove(attempt.PairingId, out _);
+        else
+            _promptUrls[attempt.PairingId] = pollingUrl;
+
         if (sessionAgent.IsConnected)
         {
-            var pollingUrl = BuildPollingUrl(attempt, remoteAddress ?? "localhost", Port);
-
             sessionAgent.ShowPairingPrompt(new PairingPromptRequest(
                 attempt.PairingId,
                 attempt.DeviceName,
@@ -328,6 +443,9 @@ public sealed class PairingManager(
 
     private void Resolve(string pairingId, PairingStatus status, string? deviceId)
     {
+        // The attempt is over, so the record of what its prompt carried has no reader left.
+        _promptUrls.TryRemove(pairingId, out _);
+
         using var connection = database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = """

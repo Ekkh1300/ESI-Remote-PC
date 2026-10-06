@@ -872,6 +872,110 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
 
     // D36 - approving must not consume the only copy of the provisioning secret
     // D37 - the pairing page must not scale a QR onto fractional pixels
+    // D39 - the phone brings its own one-time secret, so no QR code is involved at all
+    [Fact]
+    public async Task A_phone_that_brings_its_own_secret_needs_no_transfer_to_be_paired()
+    {
+        var secret = Enumerable.Range(0, 32).Select(i => (byte)(i * 7 + 3)).ToArray();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/pair/request")
+        {
+            Content = new StringContent(
+                $$"""
+                {"deviceName":"Self Secret","platform":"android","osVersion":"16",
+                 "nonce":"{{Convert.ToBase64String(secret).Replace('+', '-').Replace('/', '_').TrimEnd('=')}}",
+                 "userCode":"424242"}
+                """,
+                Encoding.UTF8, "application/json"),
+        };
+
+        using var created = await Client.SendAsync(request);
+        var body = await created.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        string pairingId;
+        using (var document = JsonDocument.Parse(body))
+        {
+            pairingId = document.RootElement.GetProperty("pairingId").GetString()!;
+
+            // The agent echoes the requester's own code, so the two screens agree without
+            // either side knowing a derivation.
+            Assert.Equal("424242", document.RootElement.GetProperty("userCode").GetString());
+        }
+
+        var pairingManager = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+
+        // The stored secret is the one the phone brought - not a fresh one it cannot produce.
+        var attempt = pairingManager.Get(pairingId)!;
+        Assert.Equal(secret, attempt.ProvisioningSecret);
+
+        // The prompt carries no polling URL, because there is nothing left to hand over.
+        Assert.Null(pairingManager.SessionPromptUrlFor(pairingId));
+
+        // Approve, then collect with the same secret: the whole flow, with no scanning.
+        var (device, _, keyId) = pairingManager.Approve(
+            pairingId, Esi.Core.Security.PairingManager.DefaultScopes);
+        Assert.Equal(1, keyId);
+
+        var supplied = Convert.ToBase64String(secret).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+        using var poll = new HttpRequestMessage(
+            HttpMethod.Get, $"/api/v1/pair/session?id={pairingId}&secret={Uri.EscapeDataString(supplied)}");
+
+        using var polled = await Client.SendAsync(poll);
+        var polledBody = await polled.Content.ReadAsStringAsync();
+
+        Assert.True(polled.StatusCode == HttpStatusCode.OK,
+            $"polling returned {(int)polled.StatusCode}: {polledBody}");
+        Assert.Contains("\"status\":\"approved\"", polledBody, StringComparison.Ordinal);
+        Assert.Contains(device.DeviceId, polledBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_nonce_of_the_wrong_length_is_rejected_rather_than_replaced()
+    {
+        // Silently minting a secret instead would hand the caller an attempt it can never
+        // unlock, which surfaces much later as "polled without a valid provisioning secret" and
+        // looks like a networking problem rather than a rejected request.
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/pair/request")
+        {
+            Content = new StringContent(
+                """{"deviceName":"Bad Nonce","platform":"android","nonce":"aGVsbG8"}""",
+                Encoding.UTF8, "application/json"),
+        };
+
+        using var created = await Client.SendAsync(request);
+        var body = await created.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Conflict, created.StatusCode);
+        Assert.Contains("32", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_phone_that_brings_nothing_still_gets_a_transfer_on_the_prompt()
+    {
+        // The fallback has to keep working: an older client cannot send a nonce, and the agent
+        // still mints the secret and puts it on the prompt for the user to scan.
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/pair/request")
+        {
+            Content = new StringContent(
+                """{"deviceName":"Old Client","platform":"android"}""",
+                Encoding.UTF8, "application/json"),
+        };
+
+        using var created = await Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        string pairingId;
+        using (var document = JsonDocument.Parse(await created.Content.ReadAsStringAsync()))
+            pairingId = document.RootElement.GetProperty("pairingId").GetString()!;
+
+        var pairingManager = _fixture.Services.GetRequiredService<Esi.Core.Security.PairingManager>();
+
+        Assert.NotNull(pairingManager.SessionPromptUrlFor(pairingId));
+    }
+
     [Fact]
     public async Task The_pairing_page_sizes_its_QR_image_to_whole_modules()
     {

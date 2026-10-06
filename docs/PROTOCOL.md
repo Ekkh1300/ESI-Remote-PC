@@ -140,14 +140,16 @@ budget was 30 a minute, hard-coded, and the tests all passed.
 
 ```
 Phone                                       PC
-  |-- POST /pair/request {name, model, platform} --->|
-  |                                            creates PairingAttempt
+  |-- POST /pair/request {name, platform, nonce, userCode} --->|
+  |                                            creates PairingAttempt and adopts the
+  |                                            phone's nonce as the provisioning secret
   |<-- 201 {id, userCode, expiresAt, method} --------|
   |                                                    [ desktop approval prompt:
-  |                                                      "New device wants to pair" ]
-  |--- GET /pair/session?id=... (poll 1/s, max 120s) -->|
+  |                                                      "New device wants to pair",
+  |                                                      showing that same userCode ]
+  |--- GET /pair/session?id=...&secret=<nonce> (1/s) -->|
   |<-- 200 {status:"pending"} --------------------------|
-  |                                                    [ user taps Approve ]
+  |                                                    [ user compares the code, taps Approve ]
   |<-- 200 {status:"approved", deviceId, keyId, wrappedSecrets, ...} (once)
   |-- POST /api/v1/auth/activate (deliver client pubkey/nonce, mark bound) -->|
 ```
@@ -156,7 +158,9 @@ Phone                                       PC
 
 ```json
 { "deviceName": "Pixel 9", "platform": "android", "osVersion": "16", "appVersion": "1.0.0",
-  "publicSpkiSha256": "…(optional, the phone's identity pin)" }
+  "publicSpkiSha256": "…(optional, the phone's identity pin)",
+  "nonce": "…(base64url, 32 bytes, the phone's own one-time secret)",
+  "userCode": "418207" }
 ```
 
 `POST /pair/request` → `201`:
@@ -171,9 +175,45 @@ they imply different instructions for the human:
 
 | Token | Meaning | What the human does |
 |---|---|---|
-| `desktop-prompt` | A signed-in session was found and has been asked to prompt. | Approve in the prompt on the PC. The phone then scans the QR that prompt shows. |
+| `desktop-prompt` | A signed-in session was found and has been asked to prompt. | Compare the code with the one on the phone, then approve in the prompt on the PC. |
 | `browser-or-cli` | Nobody is signed in, so there is no trusted display. | Stop the agent, run `esirc pair approve <code>`, start it. See §5.4.1. |
 
+### 3.2.1 Why there is no QR code
+
+`nonce` and `userCode` work in opposite directions, and it is worth being exact about which
+is which:
+
+- **`nonce`** is the credential. It must be exactly 32 bytes of base64url. It is stored as the
+  attempt's provisioning secret, and the agent releases the wrapped credentials only to a poll
+  that presents it. An agent that received a `nonce` of the wrong length rejects the request
+  outright rather than minting a replacement: a replacement would leave the caller holding an
+  attempt it can never unlock, which surfaces much later as a poll refused for a missing secret
+  and reads as a networking fault rather than a rejected request.
+- **`userCode`** is six digits the phone chose and the agent echoes back, so both screens show
+  the same characters without either side knowing a derivation. It carries no authority. Its
+  whole job is to let the human tell *their* prompt apart from one raised by something else on
+  the network — the role Bluetooth's numeric comparison plays. A malformed code is replaced
+  with a generated one rather than rejected, because it is a display token and not a
+  credential.
+
+Why this is not weaker than minting the secret server-side and transferring it: the guarantee
+was never *where* the secret was made, it was that only the party the user meant could produce
+it. The agent still releases only to a poll bearing the right value. What changed is that the
+value now starts on the device already in the user's hand, so it does not have to travel
+there.
+
+That is what removed the QR code, and with it any dependence on the phone having a camera that
+can read one. Two attempts at removing it by fixing the QR instead both failed on real
+hardware — the prompt closed on its own approval (D36) and then drew a code on fractional
+pixels (D37, D38) — which is the argument for not needing the code at all rather than for
+tuning it once more.
+
+**Compatibility.** Both fields are optional. A client that omits them gets the previous
+behaviour: the agent mints the secret, puts the polling URL on the desktop prompt, and the user
+transfers it by scanning. The `pairing-requested` log line records which path an attempt took
+(`secret supplied by the requester` or `secret minted here, to be transferred by the prompt`),
+because "which flow is this phone on" is the first thing worth knowing when a pairing will not
+finish.
 An earlier draft called the second token `tray-or-cli`. There is a tray icon, but it has no
 pairing item, so the name described a UI that does not exist.
 

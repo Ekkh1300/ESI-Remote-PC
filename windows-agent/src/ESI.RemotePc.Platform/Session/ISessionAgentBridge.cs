@@ -122,7 +122,17 @@ public sealed record PairingPromptRequest(
     string RemoteAddress,
     string UserCode,
     int ExpiresInSeconds,
-    string PollingUrl);
+    /// <summary>
+    /// The URL carrying the provisioning secret, for the prompt to draw as a QR code - or
+    /// <c>null</c> when there is nothing to transfer.
+    /// <para>
+    /// Null means the requester supplied its own secret with the request, so it can already
+    /// unlock its own credentials and the prompt only has to say yes. That is the normal case
+    /// for a current phone (D39); non-null is the fallback for a client that brought nothing,
+    /// which still needs the user to hand the secret over by scanning.
+    /// </para>
+    /// </summary>
+    string? PollingUrl);
 
 /// <summary>How the person on the desktop answered a pairing prompt.</summary>
 public enum PairingOutcome

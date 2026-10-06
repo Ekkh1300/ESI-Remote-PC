@@ -1,4 +1,4 @@
-﻿# ESI Remote PC 1.0.0
+# ESI Remote PC 1.0.0
 
 Two files. That is the whole delivery.
 
@@ -10,8 +10,8 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  7E487E9FBB4717CC32AC48EC07FA24F9E0A68D554E58A84B4BC4A66994D99BE1
-ESI-RemotePC-1.0.0.apk             E61B79783254FA3B900E735399682EA5
+ESI-RemotePC-Setup-1.0.0-x64.exe  1E4DBC5734BEC16D36F09E753EB9C324E0A68D554E58A84B4BC4A66994D99BE1
+ESI-RemotePC-1.0.0.apk             044547BC54D2A9BAF6B5498B76DD21D8
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -551,3 +551,28 @@ outside any using precisely because it escaped into the control, and the rewrite
 All five D37 tests passed throughout. They check the grid's arithmetic and never obtain the bitmap the prompt
 draws. The_prompt_draws_a_bitmap_that_is_still_readable_when_the_prompt_asks_for_it now runs the same
 detector over the real pixels, and asserts the bitmap still holds black and white. Verified to bite.
+## D39 - the QR code is gone from pairing
+
+Asked why there was a barcode at all: the honest answer is that it only ever existed to move one 32-byte
+provisioning secret from the PC to the phone. Two attempts at removing it by fixing the QR both failed on
+real hardware - the prompt closed on its own approval (D36), then drew a code on fractional pixels (D37),
+then a red cross (D38) - which is the argument for not needing it rather than for tuning it again.
+
+**The phone now mints the secret itself** and sends it as 
+once with POST /pair/request. It chooses its
+own six-digit userCode, which the agent echoes back so both screens show the same digits.
+
+This is not a weaker guarantee. It was never about *where* the secret was made, it was that only the party
+the user meant could produce it - and the agent still releases the credentials only to a poll bearing the
+right value. What changed is that the value now starts on the device already in the user's hand, so it does
+not have to travel there.
+
+The whole sequence is now: **Pair -> check the code matches -> Allow this device.** One click.
+
+Both fields are optional, so an older app still pairs against this agent the old way, with the QR on the
+prompt. The agent log records which path each attempt took.
+
+The prompt drops the QR entirely when there is nothing to transfer, and says so: "Approve only if this code
+matches the one on your phone."
+
+**The APK has changed.** Install it once; after that no QR code is involved in pairing at all.

@@ -75,9 +75,9 @@ class PairingFlowNotifier extends Notifier<PairingFlowState> {
       deviceName: _deviceName,
       osVersion: _osVersion,
       appVersion: _appVersion,
-      // Read from the current state on every poll, not from the request captured here: the
-      // secret arrives by QR scan part-way through the attempt.
-      provisioningSecret: () => state.request?.provisioningSecret ?? Uint8List(0),
+      // The secret is not passed in: the service creates it and sends it with the request
+      // (D39), so there is nothing to scan part-way through and no way for it to be wrong.
+
       onProgress: (progress) {
         if (state.progress?.isTerminal ?? false) return;
         state = state.copyWith(progress: progress);
