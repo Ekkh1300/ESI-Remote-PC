@@ -2,6 +2,15 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
+
+    <!--
+      The version the handshake reports, the installer stamps into its output name, and the
+      release README all have to agree, so it is declared once here rather than written as a
+      literal in three places that can drift apart. AgentHost reads the assembly version, which
+      this sets; the installer takes AppVersion from its own .iss, and build.ps1 checks the two
+      agree so a release cannot be cut with a mismatched pair.
+    -->
+    <Version>1.0.1</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

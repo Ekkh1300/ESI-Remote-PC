@@ -1,6 +1,6 @@
 ; ESI Remote PC - Windows installer
 ;
-; Build with:  iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss
+; Build with:  iscc /DAppVersion=1.0.1 installer\ESI-RemotePC.iss
 ; (Inno Setup 6, https://jrsoftware.org/isdl.php)
 ;
 ; The script packages the three published binaries into one MSI-free installer that
@@ -13,7 +13,7 @@
 
 #define AppName        "ESI Remote PC"
 #define AppPublisher   "ESI Remote PC"
-#define AppVersion     "1.0.0"
+#define AppVersion     "1.0.1"
 #define AppURL         "https://github.com/esi/remote-pc"
 
 ; Must match ProtocolConstants.DefaultHttpsPort. The firewall rule below uses it too.

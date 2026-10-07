@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Builds the Windows agent, the session agent, the CLI and the tests, then publishes the
     three shippable executables into artifacts\publish.
@@ -103,6 +103,22 @@ Write-Host "  sdk         $($dotnetExe)"
 Write-Host "  version     $(& $dotnetExe --version)"
 Write-Host "  config      $Configuration"
 Write-Host ''
+
+# The version lives in two places that cannot see each other: the SDK needs it in
+# Directory.Build.props to stamp the assembly the handshake reports, and Inno needs it as a
+# #define to name the installer. Nothing stops them drifting apart, and a release cut with a
+# setup.exe that says 1.0.1 next to an agent that reports 1.0.0 is exactly the sort of thing
+# nobody notices until a support call. So they are compared before anything is built.
+$productVersion = ([regex]::Match((Get-Content (Join-Path $PSScriptRoot 'Directory.Build.props') -Raw), '<Version>([^<]+)</Version>')).Groups[1].Value
+$installerVersion = ([regex]::Match((Get-Content (Join-Path $PSScriptRoot 'installer\ESI-RemotePC.iss') -Raw), '#define\s+AppVersion\s+"([^"]+)"')).Groups[1].Value
+
+if (-not $productVersion -or -not $installerVersion) {
+    throw 'Could not read the product version from Directory.Build.props or the installer AppVersion.'
+}
+if ($productVersion -ne $installerVersion) {
+    throw "Version mismatch: Directory.Build.props says $productVersion but the installer says $installerVersion. Fix one before cutting a release."
+}
+
 
 function Invoke-Step {
     param([string] $Name, [scriptblock] $Action)

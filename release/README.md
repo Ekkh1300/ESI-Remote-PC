@@ -1,17 +1,17 @@
-# ESI Remote PC 1.0.0
+# ESI Remote PC 1.0.1
 
 Two files. That is the whole delivery.
 
 | File | Size | What it is |
 |---|---|---|
-| `ESI-RemotePC-Setup-1.0.0-x64.exe` | 43.8 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.0.apk` | 51.1 MB | The Android app. |
+| `ESI-RemotePC-Setup-1.0.1-x64.exe` | 43.8 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
+| `ESI-RemotePC-1.0.1.apk` | 51.1 MB | The Android app. |
 
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.0-x64.exe  1E4DBC5734BEC16D36F09E753EB9C324E0A68D554E58A84B4BC4A66994D99BE1
-ESI-RemotePC-1.0.0.apk             044547BC54D2A9BAF6B5498B76DD21D8
+ESI-RemotePC-Setup-1.0.1-x64.exe  B9237491A61BB832D2EFE39F7D264471E88D54AA75E8C27DCDFD9ACFCD4FDA34
+ESI-RemotePC-1.0.1.apk             A1DD2F155DB4388C52EF9211E4BAB9ECD02C929B5D0FA61A94D67FFDBB0B2216
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -22,7 +22,7 @@ interesting if you know what was given up.
 
 ## Windows
 
-1. Run `ESI-RemotePC-Setup-1.0.0-x64.exe`. It asks for administrator rights through UAC.
+1. Run `ESI-RemotePC-Setup-1.0.1-x64.exe`. It asks for administrator rights through UAC.
 2. Accept the firewall rule, or add it yourself.
 3. Open `https://localhost:48220/pairing` on the PC.
 4. Pair a phone, then point the app at the PC.
@@ -58,7 +58,7 @@ gets missed in an audit.
 
 ## Android
 
-1. Copy `ESI-RemotePC-1.0.0.apk` to the phone and open it, or install with `adb install`.
+1. Copy `ESI-RemotePC-1.0.1.apk` to the phone and open it, or install with `adb install`.
 2. The app broadcasts on the LAN and finds the PC by itself. If it does not, enter the
    address by hand. The certificate pin comes from the PC's pairing page; it is never filled
    in from discovery, because a value from the wire is not evidence.
@@ -83,7 +83,7 @@ access â†’ Install unknown apps â†’ pick your file manager or browser 
 again. Over ADB it needs no such permission:
 
 ```
-adb install ESI-RemotePC-1.0.0.apk
+adb install ESI-RemotePC-1.0.1.apk
 ```
 
 It carries `arm64-v8a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
@@ -597,3 +597,18 @@ binaries are byte-identical to the shipped build.
 One device is still paired: 26aa882c6b329fd, the emulator that ran this. It cannot
 authenticate from anywhere real, and seven of the eight slots are free. To remove it:
 stop the agent, esirc pair revoke a26aa882c6b329fd, start it again.
+## 1.0.1
+
+The version now lives in one place per artifact and is checked against each other. Directory.Build.props
+carries <Version>, which is what the assembly stamps and what the handshake reports; the installer takes
+AppVersion from its own .iss, which names the setup EXE. Nothing connected the two, so uild.ps1 now
+reads both and refuses to build on a mismatch - a setup.exe that says 1.0.1 beside an agent that reports 1.0.0
+is exactly the sort of thing nobody notices until somebody calls for support. Verified by making them differ
+and watching the build stop.
+
+Also raised: the two 1.0.0 fallbacks in AgentHost.ReadVersion and SettingsStore.Version, and the version
+the app reports in its pairing request. The APK was rebuilt and read back with apt2, which reports
+ersionName='1.0.1' versionCode='2' - checked in the artifact rather than assumed from pubspec.yaml.
+
+Pairing does not need a QR code in this version. The phone creates its own one-time secret and sends it with
+the request, so the sequence is **Pair, check the code matches, Allow this device**.

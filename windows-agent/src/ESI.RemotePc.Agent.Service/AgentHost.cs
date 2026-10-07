@@ -443,7 +443,7 @@ public static class AgentHost
     private static string ReadVersion()
     {
         var version = Assembly.GetEntryAssembly()?.GetName().Version;
-        return version is null ? "1.0.0" : $"{version.Major}.{version.Minor}.{version.Build}";
+        return version is null ? "1.0.1" : $"{version.Major}.{version.Minor}.{version.Build}";
     }
 }
 

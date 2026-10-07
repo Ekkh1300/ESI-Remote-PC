@@ -126,7 +126,7 @@ class PairingFlowNotifier extends Notifier<PairingFlowState> {
 
   void reset() => state = const PairingFlowState();
 
-  static const String _appVersion = '1.0.0';
+  static const String _appVersion = '1.0.1';
   static const String _osVersion = '16';
   static const String _deviceName = 'Android phone';
 }
