@@ -411,12 +411,26 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         {
             try
             {
-                using var form = new PairingPromptForm(request, () => WasCollected(request.PairingId));
+                // The decision is taken from `onDecided`, which the form calls the moment the
+                // person decides - not from `form.Decision` after ShowDialog returns.
+                //
+                // Both halves of that used to be true in different builds and together they are
+                // this bug (D41). Reading after the dialog closed was correct while the dialog
+                // closed on the decision (D34). Then D36 made the dialog survive its own approval,
+                // because the QR on it is the only copy of the provisioning secret. The two
+                // assumptions cannot both hold: a form that stays open and a caller that waits
+                // for it to close means the click was reported a whole pairing window late, by
+                // which time the agent had expired the attempt and thrown the approval away. The
+                // button worked; the report did not arrive.
+                using var form = new PairingPromptForm(
+                    request,
+                    phoneCollected: () => WasCollected(request.PairingId),
+                    onDecided: decision => _ = result.TrySetResult(decision));
+
                 form.ShowDialog();
-                // Read after the dialog has closed, never before. `PairingPromptForm.Decision`
-                // starts life as TimedOut, so completing the task with the value it holds at
-                // this point reported every prompt as expired no matter which button the user
-                // pressed - and Approve was therefore a button that did nothing at all (D34).
+
+                // Belt and braces for the paths that end the window without going through
+                // Decide: a form torn down mid-flight, or a Close that raced the callback.
                 _ = result.TrySetResult(form.Decision);
                 form.Close();
             }

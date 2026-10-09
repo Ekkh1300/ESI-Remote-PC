@@ -33,6 +33,20 @@ internal sealed class PairingPromptForm : Form
     private readonly Button _approve;
     private readonly Button _deny;
     private readonly Func<bool>? _phoneCollected;
+    private readonly Action<PairingDecision>? _onDecided;
+
+    /// <summary>
+    /// Form heights, chosen so that every control lands inside the client rectangle.
+    /// </summary>
+    /// <remarks>
+    /// 400 with the QR - the QR is 212px square at the top right, and the buttons need to clear
+    /// it. 340 without: the code block ends at 290, so the buttons sit at 298 and end at 332,
+    /// leaving 8px to spare. Both numbers are asserted against the real control bounds by
+    /// <c>PairingPromptFormTests</c>, because a height that is wrong in the small direction does
+    /// not fail anything else - it just quietly puts the button out of reach (D40).
+    /// </remarks>
+    private const int PromptHeightWithQr = 400;
+    private const int PromptHeightWithoutQr = 340;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly DateTimeOffset _deadline;
 
@@ -42,10 +56,26 @@ internal sealed class PairingPromptForm : Form
     /// credentials. Consulted only after approval: the dialog stays open until it says yes or
     /// the window's deadline passes.
     /// </param>
-    public PairingPromptForm(PairingPromptRequest request, Func<bool>? phoneCollected = null)
+    /// <param name="onDecided">
+    /// Called the instant the person decides, before this window closes.
+    /// <para>
+    /// Not an optimisation, and not a convenience. Since the prompt began surviving its own
+    /// approval (D36) it no longer closes when Allow is clicked - deliberately, because the QR on
+    /// it is the only copy of the provisioning secret. Anything that reads
+    /// <see cref="Decision"/> after <c>ShowDialog()</c> returns is therefore reading it a whole
+    /// pairing window late, by which point the agent has already expired the attempt and refused
+    /// the approval. That is D41, and it is why clicking Allow appeared to do nothing at all: the
+    /// click was recorded perfectly and reported two minutes too late to be any use.
+    /// </para>
+    /// </param>
+    public PairingPromptForm(
+        PairingPromptRequest request,
+        Func<bool>? phoneCollected = null,
+        Action<PairingDecision>? onDecided = null)
     {
         _request = request;
         _phoneCollected = phoneCollected;
+        _onDecided = onDecided;
         _deadline = DateTimeOffset.Now.AddSeconds(Math.Max(30, request.ExpiresInSeconds));
 
         // Whether there is anything to transfer decides the whole shape of the window: no secret
@@ -58,7 +88,12 @@ internal sealed class PairingPromptForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(560, needsQr ? 400 : 300);
+        // The buttons sit at the bottom, so the form is exactly as tall as they need. It used
+        // to be 300 when there was no QR while the buttons stayed at y=330 - which put them
+        // outside the client rectangle, where WinForms silently clips them and no amount of
+        // clicking finds them. The whole pairing then stalled on a prompt that looked complete
+        // and had no reachable button, which is what a person saw on their phone.
+        ClientSize = new Size(560, needsQr ? PromptHeightWithQr : PromptHeightWithoutQr);
         BackColor = Color.FromArgb(20, 22, 28);
         ForeColor = Color.FromArgb(228, 232, 240);
         Font = new Font("Segoe UI", 9F);
@@ -142,7 +177,7 @@ internal sealed class PairingPromptForm : Form
                 : "Approve only if this code matches the one on your phone.\r\n" +
                   "If you did not start this, choose Deny.",
             AutoSize = false,
-            Bounds = new Rectangle(24, 248, 492, 38),
+            Bounds = new Rectangle(24, needsQr ? 248 : 252, 492, 38),
             ForeColor = Color.FromArgb(150, 158, 174),
             Font = new Font("Segoe UI", 8.5F),
         };
@@ -151,7 +186,7 @@ internal sealed class PairingPromptForm : Form
         {
             Text = "Allow this device",
             Size = new Size(170, 34),
-            Location = new Point(246, 330),
+            Location = new Point(246, needsQr ? 330 : 298),
             BackColor = Color.FromArgb(28, 120, 160),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
@@ -164,7 +199,7 @@ internal sealed class PairingPromptForm : Form
         {
             Text = "Deny",
             Size = new Size(104, 34),
-            Location = new Point(424, 330),
+            Location = new Point(424, needsQr ? 330 : 298),
             BackColor = Color.FromArgb(48, 52, 64),
             ForeColor = Color.FromArgb(220, 226, 236),
             FlatStyle = FlatStyle.Flat,
@@ -330,11 +365,17 @@ internal sealed class PairingPromptForm : Form
     /// moment <see cref="phoneCollected"/> goes true.
     /// </para>
     /// </remarks>
-    private void Approve()
+    internal void Approve()
     {
         _decided = true;
         _waitingForPhone = true;
         Decision = PairingDecision.Approved;
+
+        // Reported here, at the moment of the click, and not when this window eventually closes.
+        // This window now deliberately stays open - that is what D36 changed and D39 makes
+        // necessary - so a caller that waited for it to close waited until the agent had expired
+        // the attempt, and the approval arrived too late to apply (D41).
+        Report(PairingDecision.Approved);
 
         _approve.Visible = false;
         _deny.Visible = false;
@@ -401,10 +442,15 @@ internal sealed class PairingPromptForm : Form
         }
     }
 
-    private void Decide(PairingDecision decision)
+    internal void Decide(PairingDecision decision)
     {
         Decision = decision;
         _decided = true;
+
+        // Same reason as Approve: the decision is a fact the moment it is made, and the window's
+        // closing is a separate event. Reporting it here also means Escape and the countdown
+        // reach the agent the same way the buttons do.
+        Report(decision);
 
         _timer.Stop();
         _timer.Dispose();
@@ -414,7 +460,36 @@ internal sealed class PairingPromptForm : Form
         Close();
     }
 
+    /// <summary>
+    /// Hands the decision to the listener - once, and without letting it throw.
+    /// </summary>
+    /// <remarks>
+    /// Once, because Deny can arrive by three routes almost simultaneously - the button, Escape
+    /// and the countdown - and a second call would be a second attempt to apply the same answer.
+    /// And swallowed, because this runs on the UI thread from inside a button handler: a listener
+    /// that threw would become an unhandled exception that closes the prompt and loses the
+    /// decision, which is the one thing this method exists to make impossible.
+    /// </remarks>
+    private void Report(PairingDecision decision)
+    {
+        if (_reported || _onDecided is null)
+            return;
+
+        _reported = true;
+
+        try
+        {
+            _onDecided(decision);
+        }
+        catch (Exception)
+        {
+            // Nothing useful to do here: the window still closes on its own deadline, and the
+            // agent expires an unanswered attempt on its own anyway.
+        }
+    }
+
     private bool _decided;
+    private bool _reported;
     private bool _waitingForPhone;
 
     /// <summary>
