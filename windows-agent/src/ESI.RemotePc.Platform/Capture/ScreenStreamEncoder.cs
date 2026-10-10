@@ -83,7 +83,6 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
     private readonly Dictionary<int, TileState> _states = [];
     private uint _frameIndex;
     private long _lastChangeUnixMs;
-    private int _framesSinceKeyframe;
 
     /// <summary>
     /// How long a keyframe may be withheld before one is forced, in milliseconds.

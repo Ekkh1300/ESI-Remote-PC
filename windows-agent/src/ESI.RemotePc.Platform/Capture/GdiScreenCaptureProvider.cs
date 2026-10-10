@@ -226,7 +226,15 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
                 var got = GDI32.GetDIBits(memDc, bitmap, 0, (uint)height, pinned.AddrOfPinnedObject(), ref bmi, WinConst.DIB_RGB_COLORS);
                 if (got == 0)
                 {
-                    error = "GetDIBits returned no data.";
+                    error = $"GetDIBits returned no data (last error {Marshal.GetLastWin32Error()}).";
+
+                    // A cached GDI handle that has gone bad must not poison the stream for the
+                    // life of the process. D46 turned a one-frame failure into a permanent one
+                    // precisely because the next call was handed the same unusable handle and
+                    // returned the same failure. Dropping it here means the next attempt builds
+                    // a fresh bitmap and can recover on its own.
+                    InvalidateCachedBitmap();
+
                     return false;
                 }
             }
@@ -256,8 +264,24 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
         {
             if (previous != IntPtr.Zero && memDc != IntPtr.Zero)
                 GDI32.SelectObject(memDc, previous);
-            if (bitmap != IntPtr.Zero)
-                GDI32.DeleteObject(bitmap);
+
+            // D46, root cause. This deleted `bitmap`, which is `_cachedBitmap` - the handle
+            // `GetOrCreateBitmap` deliberately keeps between frames so that recreating a
+            // compatible bitmap 15-30 times a second is avoided. The delete freed the GDI
+            // object and left the cached handle pointing at nothing, so every frame after the
+            // first was blitting into a deleted object and `GetDIBits` returned nothing.
+            //
+            // The signature in the agent log was exact: one frame forwarded, 42928 bytes,
+            // then silence for the rest of the session, eight separate times over. Not a
+            // threading fault, not the encoder, not the pipe - the very first frame worked
+            // because it was the one frame that ran before the handle went stale.
+            //
+            // The bitmap's lifetime belongs to the cache: `GetOrCreateBitmap` replaces it when
+            // the size changes, and `Dispose` deletes it at the end. Here it only has to stop
+            // being selected, which the memDc teardown below does anyway.
+            if (bitmap != IntPtr.Zero && memDc != IntPtr.Zero)
+                GDI32.SelectObject(memDc, previous != IntPtr.Zero ? previous : bitmap);
+
             if (memDc != IntPtr.Zero)
                 GDI32.DeleteDC(memDc);
             if (screenDc != IntPtr.Zero)
@@ -292,6 +316,27 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
             _cachedWidth = width;
             _cachedHeight = height;
             return _cachedBitmap;
+        }
+    }
+
+    /// <summary>
+    /// Forgets the cached bitmap so the next capture builds a fresh one.
+    ///
+    /// Used when a capture fails against the cached handle. The alternative - keeping it and
+    /// failing identically forever - is what D46 did, and it is why a single bad frame could
+    /// silence a stream for the rest of the session with nothing logged anywhere.
+    /// </summary>
+    private void InvalidateCachedBitmap()
+    {
+        lock (_gate)
+        {
+            if (_cachedBitmap == IntPtr.Zero)
+                return;
+
+            GDI32.DeleteObject(_cachedBitmap);
+            _cachedBitmap = IntPtr.Zero;
+            _cachedWidth = 0;
+            _cachedHeight = 0;
         }
     }
 
