@@ -136,29 +136,46 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  /// Fills the manual form from a discovered agent. Everything except the pin, which
-  /// discovery is not allowed to supply — see _DiscoveryPanel.onUse.
+  /// Fills the manual form from a discovered agent.
   ///
-  /// What gets said afterwards depends on whether the field already holds one. This used to
-  /// be announced unconditionally from the discovered row, which told the user the pin had
-  /// been left empty even when they had just typed it; read while pairing, that sentence
-  /// stops looking like information and starts looking like the reason nothing worked.
+  /// The pin is filled only when this phone has already paired with this exact machine and
+  /// still holds the pin it verified then. Everything else about discovery is unverified -
+  /// it arrived over a broadcast anybody on the network could have sent - and the pin is the
+  /// one field that decides whether the machine at the other end is really yours.
+  ///
+  /// So a pin that comes from the wire cannot be filled in: doing so would mean the pin
+  /// authenticated nothing, because the machine supplying it is the machine being trusted.
+  /// Reading it back out of this phone's own storage is a different matter - that value was
+  /// established once, from the PC's screen or its QR code, so re-reading it trusts the past
+  /// rather than the network.
+  ///
+  /// What gets said afterwards depends on what the field already held. This used to be
+  /// announced unconditionally from the discovered row, which told the user the pin had been
+  /// left empty even when they had just typed it; read while pairing, that sentence stops
+  /// looking like information and starts looking like the reason nothing worked.
   void _adopt(String host, int port, String pinEnds) {
     final alreadyTyped = _pin.text.trim().isNotEmpty;
+    final remembered = _rememberedPin(host, port);
+
     setState(() {
       _host.text = host;
       _port.text = '$port';
+      if (!alreadyTyped && remembered != null) _pin.text = remembered;
     });
 
     final message = alreadyTyped
         ? 'Address filled in from discovery. The pin you typed was left as it is. Check '
             'the ends still match this PC before pairing: $pinEnds.'
-        : 'Address filled in from discovery. The pin is left empty on purpose: PROTOCOL.md '
-            '§2.1 treats a value from the wire as untrusted, and it is the one field that '
-            'decides whether this really is your PC. Type the full pin from the PC\'s '
-            'pairing screen, or scan its QR code - it carries the whole thing. Only its '
-            'first and last characters appear here, to check what you typed against: '
-            '$pinEnds.';
+        : remembered != null
+            ? 'Address and pin filled in from this phone\u2019s own records for $host. That '
+                'pin was verified when you paired; it is not being taken from the network. '
+                'The PC reports the ends as $pinEnds.'
+            : 'Address filled in from discovery. The pin is left empty on purpose: PROTOCOL.md '
+                '§2.1 treats a value from the wire as untrusted, and it is the one field that '
+                'decides whether this really is your PC. Type the full pin from the PC\'s '
+                'pairing screen, or scan its QR code - it carries the whole thing. Only its '
+                'first and last characters appear here, to check what you typed against: '
+                '$pinEnds.';
 
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -170,7 +187,33 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       );
   }
 
-  Future<void> _probe() async {
+  /// The pin this phone already trusts for that address, or null if it has never paired.
+  ///
+  /// Read from this phone's own records, never from discovery. The distinction is the whole
+  /// point: a pin that arrived over the network is the pin of whoever answered, so filling it
+  /// in would let anyone on the LAN present their own machine and be paired with. A pin this
+  /// phone verified once - against the PC's screen, or its QR code - is a different thing
+  /// entirely, and re-reading it trusts that earlier moment rather than the wire.
+  ///
+  /// If the address has since been taken by a different machine, the stored pin will fail to
+  /// verify and the handshake will report it. That is the right outcome: a loud refusal beats
+  /// silently pairing with the wrong computer.
+  String? _rememberedPin(String host, int port) {
+    final machines = ref.read(machineListProvider);
+    for (final machine in machines) {
+      if (machine.port != port) continue;
+      if (machine.host.trim().toLowerCase() != host.trim().toLowerCase()) continue;
+
+      for (final pin in machine.pins) {
+        final trimmed = pin.trim();
+        if (trimmed.isNotEmpty) return trimmed;
+      }
+    }
+
+    return null;
+  }
+
+Future<void> _probe() async {
     setState(() => _busy = true);
     final handshake =
         await ref.read(discoveryProvider.notifier).probe(_host.text.trim(), _portValue);
