@@ -183,15 +183,37 @@ class EsiWebSocket implements EsiWebSocketHandle {
   void _scheduleReconnect() {
     if (_disposed) return;
     _reconnectAttempt++;
-    if (_reconnectAttempt > 6) {
-      _setState(EsiSocketState.failed);
-      return;
-    }
     _setState(EsiSocketState.reconnecting);
-    // 1s, 2s, 4s … capped at 20s.
-    final delaySeconds = (1 << (_reconnectAttempt - 1)).clamp(1, 20);
+
+    // D47: this used to stop after six attempts and set `failed`. Six attempts is
+    // 1+2+4+8+16+20 seconds, so any outage longer than about fifty seconds - a service restart,
+    // a PC reboot, a Wi-Fi blip - left the socket dead for the rest of the session.
+    //
+    // What made it permanent rather than merely slow is that nothing else could revive it. The
+    // dashboard polls over HTTP on its own timer, so the app kept looking healthy: metrics kept
+    // arriving, the status line kept updating, and the only symptom was that every streaming
+    // control stayed disabled next to the words "no live socket". The one component whose whole
+    // job is to survive a PC being off was the one that gave up first, and the part of the app
+    // that had a working retry loop is the part that did not need one.
+    //
+    // So there is no attempt limit. The delay stays capped, the loop is otherwise unbounded, and
+    // `failed` now means "not connected right now" rather than "will never connect".
+    final delaySeconds = (1 << (_reconnectAttempt - 1).clamp(0, 4)).clamp(1, 20);
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), connect);
+  }
+
+  /// Drops the accumulated backoff and tries again immediately.
+  ///
+  /// The automatic loop waits up to twenty seconds, which is right for a PC that is rebooting
+  /// and wrong for someone standing there watching. This is what a retry button calls.
+  void retryNow() {
+    if (_disposed) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempt = 0;
+    if (_connecting || isLive) return;
+    connect();
   }
 
   void _teardown() {

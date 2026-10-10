@@ -348,7 +348,18 @@ class ConnectionNotifier extends Notifier<ConnectionStatus> {
   }
 
   /// The user-facing pull-to-refresh / retry button.
-  Future<void> refresh() => _refresh(ref.read(activeMachineProvider)!);
+  ///
+  /// D47: this re-read the HTTP status only. The refresh button sits in the app bar right
+  /// beside the words "no live socket", and pressing it made the dashboard repaint - which
+  /// looked like it had worked - while the socket stayed dead and every streaming control
+  /// stayed disabled. A retry control that cannot retry the thing that is broken is worse
+  /// than none, because it spends the user's patience.
+  ///
+  /// So it nudges the socket first, then re-reads the status.
+  Future<void> refresh() async {
+    ref.read(webSocketProvider)?.retryNow();
+    await _refresh(ref.read(activeMachineProvider)!);
+  }
 
   /// Re-reads the live socket state into the status, used by the status spine.
   void reportSocket(EsiSocketState next) =>

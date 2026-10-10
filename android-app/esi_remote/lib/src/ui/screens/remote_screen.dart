@@ -106,6 +106,7 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
                     live: live,
                     onStart: _start,
                     onStop: _stop,
+                    onReconnect: _reconnect,
                   ),
                 ),
                 const SizedBox(height: EsiSpace.md),
@@ -182,7 +183,7 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
     final bits = <String>[
       if (status.available) 'session helper connected' else 'session helper not available',
       status.streaming ? 'streaming' : 'not streaming',
-      if (live) 'live socket' else 'no live socket',
+      if (live) 'live socket' else 'reconnecting',
     ];
     return bits.join(' · ');
   }
@@ -202,6 +203,14 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
     ref.read(remoteInputActionsProvider).stop();
     _surface.clear();
     setState(() {});
+  }
+
+  /// Asks for the socket back now, rather than waiting out the reconnect backoff.
+  ///
+  /// Goes through `refresh()` rather than reaching for the socket directly, so the HTTP status
+  /// is re-read as well - which is what makes the dashboard catch up too, not just the socket.
+  void _reconnect() {
+    ref.read(connectionProvider.notifier).refresh();
   }
 }
 
@@ -350,12 +359,12 @@ class _StatusPanel extends StatelessWidget {
           children: <Widget>[
             EsiReadout(
               label: 'Session helper',
-              value: status.sessionAgentState,
+              value: readRemoteValue(status.sessionAgentState),
               severity: status.available ? Severity.nominal : Severity.elevated,
               tooltip: 'Screen capture and input both go through a helper running in the '
                   'signed-in user session. Without it there is no desktop to capture.',
             ),
-            EsiReadout(label: 'Capture source', value: status.captureSource),
+            EsiReadout(label: 'Capture source', value: readRemoteValue(status.captureSource)),
             EsiReadout(label: 'Maximum frame rate', value: status.maxFps == 0 ? null : '${status.maxFps} fps'),
             EsiReadout(
               label: 'Displays',
@@ -379,6 +388,7 @@ class _StreamPanel extends ConsumerWidget {
     required this.live,
     required this.onStart,
     required this.onStop,
+    required this.onReconnect,
   });
 
   final ScreenSurface surface;
@@ -387,6 +397,7 @@ class _StreamPanel extends ConsumerWidget {
   final bool live;
   final VoidCallback onStart;
   final VoidCallback onStop;
+  final VoidCallback onReconnect;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -421,10 +432,19 @@ class _StreamPanel extends ConsumerWidget {
           Row(
             children: <Widget>[
               Expanded(
-                child: FilledButton.icon(
-                  onPressed: live && !streaming ? onStart : null,
-                  icon: const Icon(Icons.play_arrow, size: 17),
-                  label: const Text('Start'),
+                child: Tooltip(
+                  // D47: Start was disabled whenever the socket was not live, and nothing on
+                  // the control - or anywhere near it - said why. Pressing it did nothing, by
+                  // design: there was no socket to send the request over. So the one action a
+                  // person would try was the one action guaranteed to be a no-op.
+                  message: live
+                      ? 'Start sending this display to the phone'
+                      : 'Unavailable: there is no live connection to the PC right now',
+                  child: FilledButton.icon(
+                    onPressed: live && !streaming ? onStart : null,
+                    icon: const Icon(Icons.play_arrow, size: 17),
+                    label: const Text('Start'),
+                  ),
                 ),
               ),
               const SizedBox(width: EsiSpace.sm),
@@ -437,6 +457,17 @@ class _StreamPanel extends ConsumerWidget {
               ),
             ],
           ),
+          // The automatic reconnect exists now, but its backoff reaches twenty seconds, and
+          // someone staring at a greyed-out button will not sit out a timer they cannot see.
+          // Without this the app recovers on its own, long after the user gave up on it.
+          if (!live) ...<Widget>[
+            const SizedBox(height: EsiSpace.sm),
+            OutlinedButton.icon(
+              onPressed: onReconnect,
+              icon: const Icon(Icons.refresh, size: 15),
+              label: const Text('Reconnect now'),
+            ),
+          ],
           if (!status.available) ...<Widget>[
             const SizedBox(height: EsiSpace.md),
             Row(
@@ -725,6 +756,44 @@ class _SettingsPanel extends StatelessWidget {
   }
 }
 
+/// Turns the agent's wire vocabulary into something a person would say.
+///
+/// The Capture panel showed `gdi` and `Ready` because those are the exact strings the agent
+/// puts on the wire and they were being handed straight to a readout. `gdi` in particular is a
+/// Windows API name appearing next to "Session helper", "Maximum frame rate" and "Displays",
+/// all of which are written for a person - so one row read as though it were meant for a
+/// developer who had just opened the wrong screen.
+///
+/// Anything unrecognised is passed through unchanged rather than guessed at, so a new agent
+/// value shows up as itself instead of being swallowed by a catch-all that renders everything
+/// as "Stopped".
+String readRemoteValue(String? raw) {
+  if (raw == null || raw.isEmpty) return '';
+  switch (raw.toLowerCase()) {
+    case 'ready':
+      return 'Ready';
+    case 'starting':
+      return 'Starting';
+    case 'stopped':
+    case 'idle':
+      return 'Stopped';
+    case 'notconnected':
+    case 'disconnected':
+      return 'Not connected';
+    case 'error':
+    case 'failed':
+      return 'Error';
+    case 'gdi':
+      return 'Windows (GDI)';
+    case 'dxgi':
+    case 'd3d11':
+      return 'Windows (GPU)';
+    case 'miracast':
+      return 'Miracast';
+  }
+  return raw;
+}
+
 class _SliderRow extends StatelessWidget {
   const _SliderRow({
     required this.label,
@@ -744,6 +813,19 @@ class _SliderRow extends StatelessWidget {
   final String suffix;
   final ValueChanged<double> onChanged;
 
+  /// The value as a person reads it, not as Dart prints a double.
+  ///
+  /// `'$value$suffix'` produced `15.0fps` and `4.0x 4`. The trailing `.0` is a Dart artefact,
+  /// not a measurement: nobody sets a frame rate of fifteen point zero, and the Capture panel
+  /// two panels up already says `30 fps`, so one screen was showing two styles for the same
+  /// quantity.
+  String get _reading {
+    final number = value == value.roundToDouble()
+        ? value.round().toString()
+        : value.toStringAsFixed(1);
+    return suffix.isEmpty ? number : '$number$suffix';
+  }
+
   @override
   Widget build(BuildContext context) => Row(
         children: <Widget>[
@@ -760,15 +842,22 @@ class _SliderRow extends StatelessWidget {
               min: min,
               max: max,
               divisions: divisions,
-              label: '$value$suffix',
+              label: _reading,
               onChanged: onChanged,
             ),
           ),
+          // 46 was too narrow for the longest reading this widget is given, and a Text that
+          // cannot fit its content wraps rather than ellipsizing. So `15.0fps` rendered as
+          // `15.0f` over `ps`, and `4.0x 4` as `4.0x` over `4` - two values that are actually
+          // one, on a settings screen, which is the worst place to look ambiguous.
           SizedBox(
-            width: 46,
+            width: 62,
             child: Text(
-              '$value$suffix',
+              _reading,
               textAlign: TextAlign.right,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
               style: EsiType.readingSmall,
             ),
           ),

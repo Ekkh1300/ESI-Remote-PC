@@ -643,9 +643,14 @@ public sealed class WebSocketHub
         }
         else
         {
+            // The template carried {Device} and nothing was passed, so this rendered as
+            // "refused for : ..." with the identifier blanked out. It compiled, it warned
+            // (CA2017), and the one log line that names *which* device could not start a
+            // stream was the one missing it.
             log.LogWarning(
                 "Screen stream refused for {Device}: the session agent is not connected, so there is " +
-                "nothing to capture. This is the desktop session agent (the tray icon), not the service.");
+                "nothing to capture. This is the desktop session agent (the tray icon), not the service.",
+                connection.DeviceId);
         }
 
         await SendAsync(connection, WsServerFrame.Of("remote.state", frame.Id, new
