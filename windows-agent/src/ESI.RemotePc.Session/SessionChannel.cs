@@ -40,6 +40,13 @@ internal sealed class SessionChannel : IAsyncDisposable
     private StreamReader? _reader;
     private volatile bool _connected;
 
+    /// <summary>
+    /// Messages dropped because the channel was not usable, for the D46 diagnostic above. Reset
+    /// to zero by the first successful write, so it counts the current outage rather than the
+    /// process lifetime.
+    /// </summary>
+    private int _droppedSends;
+
     public SessionChannel(string pipeName, Serilog.ILogger log)
     {
         _pipeName = pipeName;
@@ -166,7 +173,33 @@ internal sealed class SessionChannel : IAsyncDisposable
     {
         var pipe = _pipe;
         if (pipe is null || !_connected || !pipe.IsConnected)
+        {
+            // D46: this was a bare `return`. A frame dropped here is indistinguishable from one
+            // that was never built, so the agent saw a stream that "started" and produced exactly
+            // one frame, the session agent logged "Capturing display 0", and the pump never
+            // reported a single thing - because nothing on this path ever said anything.
+            //
+            // The other half of the problem is that this method is used for every message type,
+            // including the heartbeats that keep the service from declaring the agent dead, so the
+            // sample is coarse on purpose: a burst of dropped frames should be one line, not one
+            // per frame.
+            var dropped = Interlocked.Increment(ref _droppedSends);
+            if (dropped == 1 || dropped % 120 == 0)
+            {
+                _log.Warning(
+                    "Dropped a {Type} message: the command channel is not usable " +
+                    "(pipe={Pipe}, connected={Connected}, pipeConnected={PipeConnected}); {Total} dropped so far",
+                    message.T,
+                    pipe is null ? "none" : "present",
+                    _connected,
+                    pipe?.IsConnected,
+                    dropped);
+            }
+
             return;
+        }
+
+        Interlocked.Exchange(ref _droppedSends, 0);
 
         var json = JsonSerializer.Serialize(message, SessionJson.Options);
         var bytes = Encoding.UTF8.GetBytes(json + "\n");

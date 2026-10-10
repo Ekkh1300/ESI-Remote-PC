@@ -86,17 +86,25 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
     private int _framesSinceKeyframe;
 
     /// <summary>
-    /// How many frames pass between forced full keyframes.
+    /// How long a keyframe may be withheld before one is forced, in milliseconds.
     /// <para>
     /// This is the heartbeat of the stream (D46). Without it, a desktop that is not changing
     /// produces no frame at all: the encoder hashes each tile, finds every one unchanged, and
     /// returns null. The phone then holds a single correct-but-frozen picture forever, which it
-    /// cannot distinguish from a stream that died - and the only way out was for the user to
-    /// stop and start again. A periodic keyframe costs one redundant frame on a quiet screen,
-    /// which is the harmless direction to fail in.
+    /// cannot distinguish from a stream that died - and the only way out was for the user to stop
+    /// and start again.
+    /// </para>
+    /// <para>
+    /// Measured in time, not in frames, and that is the part that matters. A frame counter only
+    /// advances when a frame is produced, so counting frames guaranteed the heartbeat could never
+    /// fire on exactly the screens that needed it. Two seconds is comfortably under the
+    /// keep-alive and well above the rate at which a redundant full frame is noticeable.
     /// </para>
     /// </summary>
-    private int _keyframeEvery = 30;
+    private long _keyframeIntervalMs = 2000;
+
+    /// <summary>When the last keyframe was produced, on the capture clock.</summary>
+    private long _lastKeyframeUnixMs;
 
     private sealed class TileState
     {
@@ -112,7 +120,7 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
         {
             _states.Clear();
             _frameIndex = 0;
-            _framesSinceKeyframe = 0;
+            _lastKeyframeUnixMs = 0;
             _lastChangeUnixMs = 0;
         }
     }
@@ -122,7 +130,10 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
     {
         lock (_states)
         {
-            _framesSinceKeyframe = int.MaxValue;
+            // Zero means "no keyframe has been sent yet", which forces the next frame to be a full
+            // one. A frame counter cannot express a request the way a clock can, because the
+            // method that would observe it only runs when a frame is produced (D46).
+            _lastKeyframeUnixMs = 0;
         }
     }
 
@@ -149,22 +160,25 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
 
         lock (_states)
         {
-            // D46: a keyframe has to arrive on a timer, not only when one is explicitly
-            // requested. A still desktop is the normal case - the cursor has not moved, nothing
-            // is animating - and the old code produced no frame at all in that situation, so the
-            // phone received exactly one and then never heard from the stream again. The picture
-            // it showed was correct but frozen, with no way to tell a still desktop from a dead
-            // stream, and the only way to unstick it was for the user to press Stop and Start.
+            // D46: a keyframe has to arrive on a timer, not on a frame count.
             //
-            // Refreshing periodically costs one full frame per interval on a screen that is not
-            // changing, which is the cheap direction to be wrong in: a repeated keyframe is
-            // invisible, whereas a stale one is indistinguishable from a broken connection.
-            _framesSinceKeyframe++;
+            // A frame count does not work here, which is the whole difficulty and it cost a long
+            // afternoon to find. The counter could only be incremented on a frame that was
+            // produced - the method returns null when nothing changed, and the caller never
+            // reaches the code that would count it. So on a still desktop the counter never moved,
+            // never reached its threshold, and no keyframe was ever due. The stream produced one
+            // frame and then nothing, forever, and every layer above reported health.
+            //
+            // Measured against wall-clock time it behaves: the timestamp is on the captured
+            // frame, so it advances whether or not anything is sent.
+            var sinceKeyframe = _lastKeyframeUnixMs == 0
+                ? long.MaxValue
+                : frame.CapturedAtUnixMs - _lastKeyframeUnixMs;
 
             var mustKeyframe = isKeyframe ||
                                _states.Count == 0 ||
                                _states.Count != gridCols * gridRows ||
-                               _framesSinceKeyframe >= Math.Max(1, _keyframeEvery);
+                               sinceKeyframe >= _keyframeIntervalMs;
 
             for (var row = 0; row < gridRows; row++)
             {
@@ -201,16 +215,13 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
             {
                 _lastChangeUnixMs = now;
                 isKeyframe = mustKeyframe;
-                _framesSinceKeyframe = 0;
-            }
-            else
-            {
-                isKeyframe = false;
-                _framesSinceKeyframe++;
             }
 
-            if (mustKeyframe)
-                _framesSinceKeyframe = 0;
+            // Only a frame that actually goes out resets the heartbeat. Counting a keyframe that
+            // was then dropped would push the next one further away, which is how a timer like
+            // this quietly stops firing (D46).
+            if (isKeyframe && changed.Count > 0)
+                _lastKeyframeUnixMs = now;
         }
 
         if (changed.Count == 0)

@@ -222,7 +222,20 @@ class ScreenSurface {
   int _rows = 0;
   int _frameIndex = -1;
 
-  bool get hasContent => _composite != null;
+  /// Whether anything is actually drawn.
+  ///
+  /// D46: this was `_composite != null`, and a composite is built from a black rectangle plus
+  /// whatever tiles decoded. A frame in which every tile failed - or in which none arrived at
+  /// all - still produced a composite, so `hasContent` was true and the panel reported
+  /// "frame 0 · 1920x1080" over a blank screen. A black rectangle and a real picture are the same
+  /// picture to this predicate unless it asks what went into it.
+  bool get hasContent => _composite != null && _tiles.isNotEmpty;
+
+  /// How many tiles are currently on screen, so a partly-arrived frame can be reported honestly.
+  int get tileCount => _tiles.length;
+
+  /// Tiles the grid expects, from the last frame's header.
+  int get expectedTiles => _cols * _rows;
   int get width => _width;
   int get height => _height;
   int get frameIndex => _frameIndex;
@@ -382,9 +395,18 @@ class _StreamPanel extends ConsumerWidget {
       title: 'Stream',
       severity: streaming ? Severity.nominal : Severity.unknown,
       footnote: streaming
-          ? 'frame ${surface.frameIndex} · ${surface.width}×${surface.height}'
-          : 'Nothing is arriving yet. The screen only fills in once the agent starts '
-              'sending tiles.',
+          ? 'frame ${surface.frameIndex} · ${surface.width}×${surface.height} · '
+              '${surface.tileCount}/${surface.expectedTiles} tiles'
+          : surface.frameIndex >= 0
+              // D46: the tile count is the whole point. "Nothing is arriving yet" is exactly
+              // what this screen said while the agent was sending frames and every one of them
+              // failed to decode, and a frame counter alone is no better because a composite of
+              // zero tiles carries one too. Saying how many tiles are actually on screen is
+              // what separates "the agent is quiet" from "we cannot read what it sent".
+              ? 'Frame ${surface.frameIndex} arrived, but none of its '
+                  '${surface.expectedTiles} tiles could be drawn.'
+              : 'Nothing is arriving yet. The screen only fills in once the agent starts '
+                  'sending tiles.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,

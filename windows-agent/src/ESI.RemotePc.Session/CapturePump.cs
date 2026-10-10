@@ -28,7 +28,24 @@ internal sealed class CapturePump
     private readonly ScreenStreamEncoder _encoder;
     private readonly SessionChannel _channel;
     private readonly SemaphoreSlim _configGate = new(1, 1);
-    private readonly CancellationTokenSource _stopping = new();
+
+    /// <summary>
+    /// Cancels the capture thread. Recreated by <see cref="Start"/> and disposed by
+    /// <see cref="Stop"/>.
+    /// <para>
+    /// D46: this was a single readonly field created once in the constructor. The first Stop
+    /// cancelled it and nothing ever cleared it, so every later Start began with
+    /// <c>IsCancellationRequested == true</c> and the capture loop returned before it ever ran.
+    /// </para>
+    /// <para>
+    /// The symptom was not "the stream never starts" but "the stream starts and then goes
+    /// silent", which is what made it look like a codec or network problem: the agent reported
+    /// the stream started, the session agent logged "Capturing display 0", and exactly one frame
+    /// reached the phone - enough for every layer that could see it to look healthy. Only
+    /// restarting the process recovered it, because nothing else ever built a fresh token.
+    /// </para>
+    /// </summary>
+    private CancellationTokenSource _stopping = new();
 
     private Thread? _thread;
     private CaptureOptions _options = new();
@@ -36,6 +53,12 @@ internal sealed class CapturePump
     private string _deviceId = "";
     private uint _frameIndex;
     private int _consecutiveFailures;
+
+    /// <summary>Consecutive frames the delta codec had nothing to send (D46).</summary>
+    private int _skippedFrames;
+
+    /// <summary>Consecutive captures that produced no frame at all (D46).</summary>
+    private int _captureFailures;
 
     public CapturePump(Serilog.ILogger log, GdiScreenCaptureProvider capture, ScreenStreamEncoder encoder, SessionChannel channel)
     {
@@ -83,6 +106,12 @@ internal sealed class CapturePump
                 return;
             }
 
+            // A fresh token, because the previous one was cancelled by Stop and never cleared.
+            // Without this the loop below exits on its first condition check, so the stream sends
+            // nothing after the frame that Start's own request produces (D46).
+            _stopping.Dispose();
+            _stopping = new CancellationTokenSource();
+
             _thread = new Thread(CaptureLoop)
             {
                 IsBackground = true,
@@ -114,10 +143,22 @@ internal sealed class CapturePump
     {
         var next = Environment.TickCount64;
 
+        // D46 diagnostic: the loop's own heartbeat. A stream that "started" and produced one frame
+        // could mean the loop is not running at all, and nothing else said so - the agent reported
+        // the stream started, the pump logged "Capturing display 0", and both were true while
+        // nothing was capturing. Counted here, at the top, so a dead loop is visible in the log
+        // rather than inferred from the absence of frames.
+        var iterations = 0;
+
         while (!_stopping.IsCancellationRequested)
         {
             try
             {
+                if (++iterations % 300 == 1)
+                {
+                    _log.Information("Screen capture loop is running ({Iterations} iterations)", iterations);
+                }
+
                 CaptureOnce();
                 _consecutiveFailures = 0;
             }
@@ -182,8 +223,16 @@ internal sealed class CapturePump
         // what a 1920-wide one does on a phone-sized screen.
         if (!_capture.TryCapture(display, MaxStreamWidth, out var frame, out var error) || frame is null)
         {
-            if (error is not null)
-                _log.Debug("Capture of display {Display} produced no frame: {Error}", display.Id, error);
+            // D46: this path was Debug, and the Debug level is below what this process logs at,
+            // so a capture that never succeeded was indistinguishable from one that succeeded and
+            // changed nothing. It is the first thing to check now: the encoder's skip counter
+            // below never increments if we return here.
+            if (++_captureFailures % 60 == 1)
+            {
+                _log.Information("Capture of display {Display} produced no frame ({Count} so far): {Error}",
+                    display.Id, _captureFailures, error ?? "no error reported");
+            }
+
             return;
         }
 
@@ -193,7 +242,23 @@ internal sealed class CapturePump
             frame, display.Id, _options.GridCols, _options.GridRows, _options.Quality, isKeyframe);
 
         if (encoded is null)
+        {
+            // Nothing changed on the desktop, so the delta codec had nothing to send. Normal, and
+            // the encoder's own keyframe timer is what guarantees it cannot last (D46). Logged at
+            // Debug and sampled, because an unbounded run of these IS the silent-stream defect.
+            if (++_skippedFrames % 60 == 1)
+            {
+                _log.Information("Skipped {Count} frames with no changed tiles", _skippedFrames);
+            }
+
             return;
+        }
+
+        if (_skippedFrames > 0)
+        {
+            _log.Information("Resumed after {Count} frames with no changed tiles", _skippedFrames);
+            _skippedFrames = 0;
+        }
 
         _frameIndex++;
 

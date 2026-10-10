@@ -451,9 +451,20 @@ class FeatureUnavailable extends StatelessWidget {
         padding: const EdgeInsets.all(EsiSpace.lg),
         child: EsiEmptyState(
           icon: Icons.block_outlined,
-          title: '$label is switched off on the PC',
-          body: 'The agent reports that its "$feature" capability is disabled. Turn it on '
-              'in the agent settings on the PC and this screen will start working.',
+          // D45: this used to say the capability was "switched off on the PC" and to send the
+          // reader to the PC's settings. It was wrong, and confidently so: the handshake had
+          // `remote: true` the whole time. The screen appeared because a provider here had not
+          // finished initialising, so `supports()` fell through to false - and the message
+          // described the one thing that was certainly not wrong, on the one machine the reader
+          // was not looking at.
+          //
+          // So it now says what is actually known, and points at the thing that is actually
+          // still unknown: this app has not heard from the PC.
+          title: '$label is unavailable',
+          body: 'This app has not received the PC\'s list of capabilities yet, so it cannot '
+              'tell whether "$feature" is available. The PC may well have it switched on. '
+              'Re-check the connection below; if the problem persists, update the agent on the '
+              'PC.',
           accent: EsiPalette.dim,
         ),
       );
