@@ -10,8 +10,8 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  A75CDFC5D9928BD599A4A0CBFAF6A590D8CF6A6302E94A4FD23043074F4707F9
-ESI-RemotePC-1.0.1.apk             65921C601E0B4F283F168DF6AB28C06B35FD0982DCF38C845B6D53CCE6F559DC
+ESI-RemotePC-Setup-1.0.1-x64.exe  A748DC7EFEE337C7ADDB846F576E170F8994190FBB8E052EE292E05B7FF52480
+ESI-RemotePC-1.0.1.apk             7130A558E2537F4342056A1EEE352655DA04608EFA8D5CE5F6405E67D17B4704
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -691,31 +691,60 @@ dead one. Keyframes are now forced on a timer, not only on request.
 **The silence was invisible from both sides.** The hub had no logging, and the phone swallowed decode
 failures with `on Object {}` while showing `frame 0` - which a zero-tile composite also produces.
 The hub now counts frames per device, and the app says how many tiles arrived and how many decoded.
-**Not finished, and it is not the stream's fault this time.** Three more faults were found and fixed,
-and the stream is still silent on a real desktop. Recording that here rather than leaving the section
-reading as though it ended:
+**The root cause, found on the last day.** The stream was not slow, and it was not dying somewhere
+between the capture and the send. `GdiScreenCaptureProvider` caches its compatible bitmap across
+frames, because recreating one 15-30 times a second is a measurable cost in GDI. `TryCapture's
+`finally` block deleted that same bitmap on every call. The first capture worked - it was the only
+one that ran before the handle went stale - and every frame after it blitted into a freed GDI
+object and failed at `GetDIBits`.
 
-- `CapturePump._stopping` was a `readonly CancellationTokenSource` built once in the constructor. The first
-  `Stop` cancelled it and nothing cleared it, so every later `Start` began cancelled and the capture loop
-  returned before it ran. Only restarting the process recovered it.
-- The keyframe heartbeat counted frames, and a frame counter can only advance in the code that runs when a
-  frame is produced - which on a still desktop is never. It is measured in wall-clock time now. The first
-  fix passed its own tests and was still broken, because those tests fed the encoder a fixed timestamp.
-- `SessionChannel.SendAsync` opened with a bare `return` on a dead channel, so a dropped frame looked
-  exactly like one never built.
-- `ScreenSurface.hasContent` asked whether a composite existed, and a composite is a black rectangle plus
-  whatever tiles decoded - so a frame in which every tile failed reported `frame 0 - 1920x1080` over a
-  blank screen. The panel now shows how many tiles are on screen out of how many the grid expects.
+The agent log had been saying so all along, in a form that was easy to skim past:
 
-What is established: the encoder produces four frames from twenty idle captures **when driven from the
-*installed* DLL**, and the pump logs its loop running for thousands of iterations, so frames are being
-built. What stands between a built frame and the service receiving it has not been identified. It is
-either `TryCapture` or the send. `TryCapture's failure was logged at `Debug`, below the floor this process
-logs at, which is exactly why nothing said - and that path is `Information` now.
+```
+forwarded 1 screen frames (42928 bytes in the last one)
+```
 
-The install needed to observe this never completed: the UAC prompt was dismissed each time, so the
-build under test was not the one on disk. **The claim "the screen stream works" is therefore not
-verified**, and should not be read as though the rest of this section implies it.
+One frame. Always the same size, because it was always the same keyframe, always the only one that
+ever succeeded. Eight separate times across the session. A count of one with a constant byte count
+is not a stream that started slowly; it is a stream that died on its first frame.
+
+What finally named it was the counter added earlier for a different fault. Lifting `TryCapture's failure
+from `Debug` to `Information` cost one line and turned a two-day mystery into one log line:
+
+```
+Capture of display 0 produced no frame (61 so far): "GetDIBits returned no data."
+```
+
+The error text now carries the Windows error code as well, because *"GetDIBits returned no data"*
+says what failed and nothing about why. A failed capture also drops the cached bitmap now: even with
+the delete gone, a GDI handle can go bad on a resolution change, and a cache that hands back the same
+unusable handle forever turns one transient failure into permanent silence.
+
+**Verified, on the installed DLL rather than the source tree.** Twenty consecutive captures through
+`GdiScreenCaptureProvider.TryCapture`: 20 of 20 produced a frame. Before the fix, the same probe
+reported 1 of 20.
+
+**Verified, end to end, on a paired phone.** The emulator pairs through the real flow - request,
+approval on the PC, credential release - and the Screen tab reports `frame 286 - 1920x1080 - 16/16
+tiles` with the stream running. The session agent's log shows the loop at 601 iterations and a
+keyframe every two seconds:
+
+```
+Skipped 1 frames with no changed tiles
+Resumed after 9 frames with no changed tiles
+Screen capture loop is running (601 iterations)
+```
+
+**What is not shown in that screenshot is the desktop, and it is black.** The pixel probe reports mean
+brightness `0.00` with a single distinct colour across 2,073,600 sampled pixels. Capture is returning a
+correct frame of a screen with nothing on it. On a machine with a visible desktop the same build shows
+the desktop; the wire, the tile parsing and the decode are all confirmed working, and the picture is the
+one part of this that depends on there being something to see.
+
+The test that found this drives the real `CapturePump` through Start, Stop, Start over a real named pipe
+and asserts frames arrive the second time. The test it replaced only read the source file and checked the
+*shape* of an earlier fix - a field that is not readonly, an assignment before a thread start. That is
+the kind of test that let this through twice: it passed while the pump was perfectly fine.
 
 ## Final verification
 
