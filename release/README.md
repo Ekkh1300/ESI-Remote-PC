@@ -11,7 +11,7 @@ SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.1-x64.exe  A75CDFC5D9928BD599A4A0CBFAF6A590D8CF6A6302E94A4FD23043074F4707F9
-ESI-RemotePC-1.0.1.apk             3A2D9D9121A2D062617D42EE9D9B88E6787DE78B5C60C66C4515CE4ACBD64A10
+ESI-RemotePC-1.0.1.apk             65921C601E0B4F283F168DF6AB28C06B35FD0982DCF38C845B6D53CCE6F559DC
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -691,6 +691,31 @@ dead one. Keyframes are now forced on a timer, not only on request.
 **The silence was invisible from both sides.** The hub had no logging, and the phone swallowed decode
 failures with `on Object {}` while showing `frame 0` - which a zero-tile composite also produces.
 The hub now counts frames per device, and the app says how many tiles arrived and how many decoded.
+**Not finished, and it is not the stream's fault this time.** Three more faults were found and fixed,
+and the stream is still silent on a real desktop. Recording that here rather than leaving the section
+reading as though it ended:
+
+- `CapturePump._stopping` was a `readonly CancellationTokenSource` built once in the constructor. The first
+  `Stop` cancelled it and nothing cleared it, so every later `Start` began cancelled and the capture loop
+  returned before it ran. Only restarting the process recovered it.
+- The keyframe heartbeat counted frames, and a frame counter can only advance in the code that runs when a
+  frame is produced - which on a still desktop is never. It is measured in wall-clock time now. The first
+  fix passed its own tests and was still broken, because those tests fed the encoder a fixed timestamp.
+- `SessionChannel.SendAsync` opened with a bare `return` on a dead channel, so a dropped frame looked
+  exactly like one never built.
+- `ScreenSurface.hasContent` asked whether a composite existed, and a composite is a black rectangle plus
+  whatever tiles decoded - so a frame in which every tile failed reported `frame 0 - 1920x1080` over a
+  blank screen. The panel now shows how many tiles are on screen out of how many the grid expects.
+
+What is established: the encoder produces four frames from twenty idle captures **when driven from the
+*installed* DLL**, and the pump logs its loop running for thousands of iterations, so frames are being
+built. What stands between a built frame and the service receiving it has not been identified. It is
+either `TryCapture` or the send. `TryCapture's failure was logged at `Debug`, below the floor this process
+logs at, which is exactly why nothing said - and that path is `Information` now.
+
+The install needed to observe this never completed: the UAC prompt was dismissed each time, so the
+build under test was not the one on disk. **The claim "the screen stream works" is therefore not
+verified**, and should not be read as though the rest of this section implies it.
 
 ## Final verification
 
