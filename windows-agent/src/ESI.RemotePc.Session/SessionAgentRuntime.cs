@@ -30,6 +30,13 @@ internal sealed class SessionAgentRuntime : ApplicationContext
     private readonly InputPump _inputPump;
 
     /// <summary>
+    /// Built here, in the interactive session, so that Core Audio can be opened. The service
+    /// cannot do this: Core Audio is a per-session API, and its session 0 has no endpoint, which
+    /// is why every volume control it served came back refused (D43).
+    /// </summary>
+    private readonly Esi.Platform.Media.MediaController _media;
+
+    /// <summary>
     /// Pairing attempts whose phone has taken its credentials, keyed by attempt id.
     /// <para>
     /// A prompt outliving its approval is what made this necessary, and it is also what makes a
@@ -57,6 +64,8 @@ internal sealed class SessionAgentRuntime : ApplicationContext
             new SerilogLoggerAdapter<Esi.Platform.Capture.ScreenStreamEncoder>(_log));
         _injector = new Esi.Platform.Input.InputInjector(
             new SerilogLoggerAdapter<Esi.Platform.Input.InputInjector>(_log));
+        _media = new Esi.Platform.Media.MediaController(
+            new SerilogLoggerAdapter<Esi.Platform.Media.MediaController>(_log));
 
         _capturePump = new CapturePump(_log, _capture, _encoder, _channel);
         _inputPump = new InputPump(_log, _injector);
@@ -259,6 +268,18 @@ internal sealed class SessionAgentRuntime : ApplicationContext
 
             case SessionChannelProtocol.Commands.TerminateApp:
                 await TerminateAsync(command).ConfigureAwait(false);
+                break;
+
+            case SessionChannelProtocol.Commands.MediaKey:
+                InjectMediaKey(command);
+                break;
+
+            case SessionChannelProtocol.Commands.MediaTransport:
+                InjectMediaTransport(command);
+                break;
+
+            case SessionChannelProtocol.Commands.MediaVolumeSet:
+                SetMediaVolume(command);
                 break;
 
             case SessionChannelProtocol.Commands.ShowToast:
@@ -596,6 +617,105 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         {
             await CommandResultAsync(command, "app.terminate", false, ex.Message).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Injects a volume or mute key from here, in the interactive session.
+    /// <para>
+    /// The service cannot do this. It runs in session 0, where the volume keys are injected into
+    /// a desktop nobody is watching and Core Audio cannot be opened to read the volume back, so
+    /// every volume control the phone has silently came back as <c>409</c> with no reason. Here,
+    /// in the signed-in user's session, the same keys work (D43).
+    /// </para>
+    /// </summary>
+    private void InjectMediaKey(SessionCommandEnvelope command)
+    {
+        if (command.VirtualKey is not { } vk || vk > ushort.MaxValue)
+        {
+            _ = CommandResultAsync(command, "media.key", false, "No virtual key was supplied.");
+            return;
+        }
+
+        var action = command.Action ?? "media.key";
+        var result = Esi.Platform.Media.MediaController.SendVolumeKeyFromSession(
+            (ushort)vk, command.Repeats ?? 5, action);
+
+        Log.Information("Media key {Action} (VK 0x{Vk:x2}) {Outcome} for {Device}",
+            action, vk, result.Accepted ? "delivered" : "was not delivered", command.DeviceId ?? "the phone");
+
+        _ = CommandResultAsync(command, "media.key", result.Accepted, result.Detail ?? $"{action} was sent.");
+    }
+
+    /// <summary>
+    /// Injects a transport key from here, in the interactive session.
+    /// <para>
+    /// These were the quiet half of D43. The volume keys were refused loudly with a 409; the
+    /// transport keys went through <c>SendInput</c> from session 0 as well, but from there the
+    /// call <i>succeeds</i> - the events are queued into a desktop nobody is watching - so the
+    /// service answered 200 and nothing happened. Play and pause looked like they worked, and
+    /// only failed in the one way that has no error to notice.
+    /// </para>
+    /// </summary>
+    private void InjectMediaTransport(SessionCommandEnvelope command)
+    {
+        if (!Enum.TryParse<Esi.Protocol.MediaAction>(command.Action, ignoreCase: true, out var action) ||
+            Esi.Platform.Media.MediaController.TransportVirtualKey(action) is not { } vk)
+        {
+            _ = CommandResultAsync(command, "media.transport", false,
+                $"'{command.Action}' is not a transport action.");
+            return;
+        }
+
+        var result = Esi.Platform.Media.MediaController.SendVolumeKeyFromSession(vk, 1, action.ToString());
+
+        Log.Information("Media transport {Action} (VK 0x{Vk:x2}) {Outcome} for {Device}",
+            action, vk, result.Accepted ? "delivered" : "was not delivered",
+            command.DeviceId ?? "the phone");
+
+        _ = CommandResultAsync(command, "media.transport", result.Accepted,
+            result.Detail ?? $"{action} was sent.");
+    }
+
+    /// <summary>
+    /// Moves the volume to an absolute target from here.
+    /// <para>
+    /// This is the one place the walk can be computed, because it is the one place the current
+    /// volume can be read: Core Audio is a per-session API, so the service's session 0 gets
+    /// nothing back and its <c>SetVolume</c> refused outright. Here a real
+    /// <see cref="Esi.Platform.Media.MediaController"/> does the read, presses the keys, and reads
+    /// again (D43).
+    /// </para>
+    /// </summary>
+    private void SetMediaVolume(SessionCommandEnvelope command)
+    {
+        var target = Math.Clamp(command.Repeats ?? 50, 0, 100);
+        var controller = _media;
+
+        var current = controller.GetState().Volume;
+        var delta = target - current;
+        var action = command.Action ?? "volumeSet";
+
+        Esi.Protocol.MediaActionResponse result;
+        if (delta == 0)
+        {
+            // Already there. The mute state is still reported, because the phone asked for a
+            // slider position and deserves to be told the truth about it.
+            result = new Esi.Protocol.MediaActionResponse { Accepted = true, Action = action };
+        }
+        else
+        {
+            result = Esi.Platform.Media.MediaController.SendVolumeKeyFromSession(
+                delta > 0 ? Esi.Platform.Native.WinConst.VK_VOLUME_UP : Esi.Platform.Native.WinConst.VK_VOLUME_DOWN,
+                Math.Abs(delta),
+                action);
+        }
+
+        Log.Information("Volume {Action} {From} -> {To} for {Device}: {Outcome}",
+            action, current, target, command.DeviceId ?? "the phone",
+            result.Accepted ? "delivered" : "was not delivered");
+
+        _ = CommandResultAsync(command, "media.volumeSet", result.Accepted,
+            result.Detail ?? $"{action} was sent.");
     }
 
     private Task CommandResultAsync(SessionCommandEnvelope command, string name, bool succeeded, string? detail)

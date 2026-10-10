@@ -175,6 +175,10 @@ public static class AgentHost
         builder.Services.AddSingleton<HandshakeBuilder>();
         builder.Services.AddSingleton<AgentClock>();
 
+        // Holds the newest camera frame pushed up by a phone, for the app and for MJPEG
+        // consumers on the network.
+        builder.Services.AddSingleton<Esi.Platform.Camera.CameraFrameStore>();
+
         // ---- Security ----
         builder.Services.AddSingleton<DeviceStore>();
         builder.Services.AddSingleton<AuditLog>();
@@ -359,6 +363,7 @@ public static class AgentHost
             Endpoints.MapNotifications(endpoints);
             Endpoints.MapGaming(endpoints);
             Endpoints.MapRemote(endpoints);
+            Endpoints.MapCamera(endpoints);
             Endpoints.MapAdmin(endpoints);
             Endpoints.MapWebSocket(endpoints);
         });

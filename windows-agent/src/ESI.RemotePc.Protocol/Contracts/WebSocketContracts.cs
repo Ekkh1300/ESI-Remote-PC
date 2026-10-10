@@ -80,6 +80,16 @@ public struct ScreenFrameHeader
         => new() { Magic = ExpectedMagic, FrameType = FrameTypes.ResyncRequest, DisplayId = displayId, FrameIndex = index,
                    TileCount = tiles, Codec = Codecs.Jpeg, PayloadLength = payloadLen };
 
+    /// <summary>
+    /// A camera picture pushed up by the phone. <paramref name="width"/> and
+    /// <paramref name="height"/> carry the picture's real dimensions, and there are no grid
+    /// fields to read: a camera frame is one image, not a grid of tiles.
+    /// </summary>
+    public static ScreenFrameHeader Camera(uint index, int width, int height, uint payloadLen)
+        => new() { Magic = ExpectedMagic, FrameType = FrameTypes.CameraFrame, FrameIndex = index,
+                   TileCount = 1, Codec = Codecs.Jpeg, ScreenWidth = width, ScreenHeight = height,
+                   PayloadLength = payloadLen };
+
     public byte[] ToBytes()
     {
         var b = new byte[Size];
@@ -103,6 +113,22 @@ public static class FrameTypes
     public const ushort Keyframe = 1;
     public const ushort TileUpdate = 2;
     public const ushort ResyncRequest = 3;
+
+    /// <summary>
+    /// A camera frame from the phone, going the other way: the phone pushes it up and the PC
+    /// serves it as MJPEG.
+    /// <para>
+    /// It reuses this header rather than inventing one. The magic, the codec field and the
+    /// width/height/payload trio already say everything a camera frame needs, and a client can
+    /// therefore tell the two apart with a single comparison on <see cref="FrameType"/> - which
+    /// matters because both arrive on the same binary WebSocket.
+    /// </para>
+    /// <para>
+    /// There are no tiles: a camera picture is one whole image, so <c>TileCount</c> is always 1
+    /// and the payload is a single JPEG rather than a descriptor list.
+    /// </para>
+    /// </summary>
+    public const ushort CameraFrame = 4;
 }
 
 public static class Codecs

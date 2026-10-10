@@ -878,14 +878,15 @@ offset  size  field
 24      2     gridCols
 26      2     gridRows
 28      4     payloadLength
---- payload ---
-        per tile (tileCount × 14 bytes):
+--- descriptor table: tileCount x 14 bytes, contiguous, starting at offset 32 ---
         2     col
         2     row
         2     tileWidth
         2     tileHeight
         4     tileLength
-        ...   tileLength bytes of JPEG
+--- payload region: starts immediately after the LAST descriptor; the JPEGs follow ---
+        ...   tileLength bytes of JPEG, in the order the descriptors listed
+        (so the payload region holds payloadLength bytes and nothing else)
 ```
 
 For `frameType == 3` the payload is just a `frameIndex` + the list of tiles the client

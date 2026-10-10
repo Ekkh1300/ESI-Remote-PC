@@ -243,16 +243,30 @@ class ScreenSurface {
     _frameIndex = header.frameIndex;
 
     final decoded = <String, ui.Image>{};
+    var failures = 0;
     for (final tile in tiles) {
       try {
         final codec = await ui.instantiateImageCodec(tile.jpeg);
         final frame = await codec.getNextFrame();
         decoded['${tile.col},${tile.row}'] = frame.image;
-      } on Object {
+      } on Object catch (e) {
         // A tile that will not decode is left as whatever was there before, so one bad
         // packet shows a stale cell rather than a black one.
+        failures++;
+        debugPrint('tile ${tile.col},${tile.row} (${tile.width}x${tile.height}, '
+            '${tile.jpeg.length}B) failed to decode: $e');
       }
     }
+
+    // D46 follow-up: a black stream that reports a frame number looks identical to a
+    // working one, because `hasContent` is true as soon as a composite exists - and a
+    // composite of zero tiles is still a black rectangle. Saying how many tiles arrived
+    // and how many decoded is what separates "the agent is not sending" from "we cannot
+    // read what it sent". They look the same to the user.
+    debugPrint('frame ${header.frameIndex}: ${tiles.length} tiles offered, '
+        '${decoded.length} decoded, $failures failed, grid '
+        '${header.gridCols}x${header.gridRows}, surface '
+        '${header.screenWidth}x${header.screenHeight}');
     for (final entry in decoded.entries) {
       _tiles.remove(entry.key)?.dispose();
       _tiles[entry.key] = entry.value;

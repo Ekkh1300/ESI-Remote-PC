@@ -191,11 +191,30 @@ public sealed class WebSocketHub
     private readonly SemaphoreSlim _streamGate = new(1, 1);
     private string? _activeStreamDevice;
 
-    public WebSocketHub(ILogger<WebSocketHub> log, MetricsService metrics, RemoteService remote)
+    /// <summary>
+    /// The newest camera frame per phone, for the MJPEG endpoint and the app's preview.
+    /// </summary>
+    private readonly Esi.Platform.Camera.CameraFrameStore _cameras;
+
+    /// <summary>
+    /// Devices already announced as serving a camera, so the log says it once per device instead
+    /// of on every frame at 15fps.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _cameraSeenBy = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Screen frames forwarded per device, for the D46 stream diagnostic. See
+    /// <see cref="OnFrameReceived"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, int> _framesForwarded = new(StringComparer.Ordinal);
+
+    public WebSocketHub(ILogger<WebSocketHub> log, MetricsService metrics, RemoteService remote,
+        Esi.Platform.Camera.CameraFrameStore cameras)
     {
         _log = log;
         _metrics = metrics;
         _remote = remote;
+        _cameras = cameras;
         remote.FrameReceived += OnFrameReceived;
     }
 
@@ -219,6 +238,17 @@ public sealed class WebSocketHub
         if (deviceId.Length == 0 || _activeStreamDevice != deviceId)
             return;
 
+        // D46: a stream that is capturing but shows nothing on the phone is indistinguishable
+        // from one that is capturing and being dropped. Counting at the very top of this method
+        // says which: a rising count means the frames arrived here and the fault is downstream,
+        // and no count at all means the session agent is not producing them. Once a stream runs
+        // this is one line per frame, so it is rate-limited to a summary per stream.
+        if (_framesForwarded.AddOrUpdate(deviceId, 1, static (_, n) => n + 1) is var count && count % 60 == 1)
+        {
+            log.LogInformation("[ws] {Device}: forwarded {Frames} screen frames ({Bytes} bytes in the last one)",
+                deviceId, count, frame.Data.Length);
+        }
+
         foreach (var connection in _connections.Values)
         {
             if (!string.Equals(connection.DeviceId, deviceId, StringComparison.Ordinal))
@@ -230,6 +260,65 @@ public sealed class WebSocketHub
             // Fire-and-forget: the pipe pump must not wait on a slow phone, and SendBinaryAsync
             // already swallows the failure that a dropped socket produces.
             _ = SendBinaryAsync(connection, frame.Data, connection.Cancellation.Token);
+        }
+    }
+
+    /// <summary>
+    /// Takes a camera frame pushed up by the phone and stores it for the MJPEG endpoint.
+    /// <para>
+    /// The header is validated rather than trusted. A phone can be a paired device and still be
+    /// buggy, compromised, or simply not this build, and a bad <c>PayloadLength</c> read from the
+    /// wire would either slice past the buffer or - worse - be used to index into it. The frame is
+    /// taken by declared length only after that length has been checked against what actually
+    /// arrived.
+    /// </para>
+    /// </summary>
+    private void AcceptCameraFrame(HubConnection connection, byte[] message)
+    {
+        if (message.Length < ScreenFrameHeader.Size)
+        {
+            log.LogWarning("[ws] {Device} sent a {Bytes}-byte binary frame, too short for a header",
+                connection.DeviceId, message.Length);
+            return;
+        }
+
+        var magic = BitConverter.ToUInt32(message, 0);
+        var frameType = BitConverter.ToUInt16(message, 4);
+
+        if (magic != ScreenFrameHeader.ExpectedMagic || frameType != FrameTypes.CameraFrame)
+        {
+            log.LogWarning("[ws] {Device} sent an unrecognised binary frame (magic 0x{Magic:x8}, type {Type})",
+                connection.DeviceId, magic, frameType);
+            return;
+        }
+
+        var width = BitConverter.ToInt32(message, 16);
+        var height = BitConverter.ToInt32(message, 20);
+        var declared = BitConverter.ToUInt32(message, 28);
+        var available = message.Length - ScreenFrameHeader.Size;
+
+        if (declared != available || declared == 0)
+        {
+            log.LogWarning("[ws] {Device} declared a {Declared}-byte camera frame but sent {Available}",
+                connection.DeviceId, declared, available);
+            return;
+        }
+
+        if (width <= 0 || height <= 0)
+        {
+            log.LogWarning("[ws] {Device} sent a camera frame with {Width}x{Height} dimensions",
+                connection.DeviceId, width, height);
+            return;
+        }
+
+        var jpeg = message.AsSpan(ScreenFrameHeader.Size, (int)declared).ToArray();
+        _cameras.Publish(connection.DeviceId, jpeg, width, height);
+
+        if (!_cameraSeenBy.ContainsKey(connection.DeviceId))
+        {
+            _cameraSeenBy[connection.DeviceId] = 0;
+            log.LogInformation("[ws] {Device} is now serving a {Width}x{Height} camera over MJPEG",
+                connection.DeviceId, width, height);
         }
     }
 
@@ -291,6 +380,10 @@ public sealed class WebSocketHub
         using var ct = CancellationTokenSource.CreateLinkedTokenSource(connection.Cancellation.Token);
         var buffer = new byte[64 * 1024];
 
+        // Accumulates a multi-segment binary message. Declared outside the loop so it survives
+        // between reads, which is the entire point: EndOfMessage only arrives on the last piece.
+        MemoryStream? incoming = null;
+
         // Per-connection background work: metrics streaming and keepalive.
         using var channels = CancellationTokenSource.CreateLinkedTokenSource(ct.Token);
         var workers = new List<Task>
@@ -314,6 +407,31 @@ public sealed class WebSocketHub
 
                 if (receive.Count == 0)
                     continue;
+
+                // Binary is the phone pushing a camera frame up. It needs no JSON wrapper and no
+                // dispatch, so it is handled here rather than going through the text path below.
+                //
+                // The continuation is the whole reason this works. A single ReceiveAsync only
+                // returns whatever one TCP segment carried, which for a camera JPEG is usually a
+                // fragment: at 64 KB per read, a 640x480 frame arrives in several pieces. Parsing
+                // a header off the first piece and treating the rest as payload would publish a
+                // truncated image, and it would fail intermittently, only on frames that happened
+                // to straddle a segment boundary. So the message is accumulated until it is
+                // EndOfMessage.
+                if (receive.MessageType == WebSocketMessageType.Binary)
+                {
+                    incoming ??= new MemoryStream();
+                    incoming.Write(buffer, 0, receive.Count);
+
+                    if (!receive.EndOfMessage)
+                        continue;
+
+                    var complete = incoming.ToArray();
+                    incoming.Dispose();
+                    incoming = null;
+                    AcceptCameraFrame(connection, complete);
+                    continue;
+                }
 
                 var text = Encoding.UTF8.GetString(buffer, 0, receive.Count);
 
@@ -354,6 +472,20 @@ public sealed class WebSocketHub
 
     private async Task DispatchAsync(HubConnection connection, WsClientFrame frame)
     {
+        // Every frame the socket delivers is logged, with its type, before anything else looks
+        // at it.
+        //
+        // The hub had no logging at all, which made the entire screen-and-input path opaque: a
+        // phone reporting "Start did nothing" and an agent with nothing to say about it is
+        // indistinguishable from a frame that never arrived, a frame that was rejected, and a
+        // frame that was handled and produced nothing. It was the reason D42 took this long to
+        // find. `ping` is the one exception - it arrives every few seconds forever and says
+        // nothing.
+        if (frame.T is not ("ping" or "pong"))
+        {
+            log.LogInformation("[ws] {Device} sent {Frame}", connection.DeviceId, frame.T);
+        }
+
         // Every frame is scope-checked here even though the upgrade only required `read`.
         // The socket multiplexes subscriptions and streams next to commands that drive the
         // mouse and the keyboard, so checking once at the handshake would let a read-only
@@ -457,6 +589,12 @@ public sealed class WebSocketHub
         "media.command" => DeviceScope.Control,
         "power.command" => DeviceScope.Control,
         "files.write" => DeviceScope.Files,
+
+        // Camera frames do not appear here, and that is deliberate rather than an oversight. They
+        // arrive as binary messages, which never reach this table, so there is no frame-type name
+        // to write. What guards them is the upgrade itself: the socket is only opened to a paired
+        // device holding the control scope, because turning a phone's camera on is a control
+        // action for the same reason moving its mouse is - the PC is being driven from elsewhere.
         _ => DeviceScope.Read,
     };
 
@@ -478,6 +616,8 @@ public sealed class WebSocketHub
             }
 
             _activeStreamDevice = connection.DeviceId;
+            // A new stream starts a new count; see _framesForwarded (D46).
+            _framesForwarded[connection.DeviceId] = 0;
         }
         finally
         {
@@ -491,6 +631,22 @@ public sealed class WebSocketHub
             frame.Quality ?? 70,
             (frame.Grid is { Length: 2 } ? frame.Grid[0] : 4),
             (frame.Grid is { Length: 2 } ? frame.Grid[1] : 4));
+
+        // Whether the stream actually started, and if not why. The reply below carries the
+        // same detail, but only the phone can see that, and the phone was showing a disabled
+        // Start button with no explanation at all (D42).
+        if (started)
+        {
+            log.LogInformation(
+                "Screen stream started for {Device}: display {Display}, {Fps} fps, quality {Quality}",
+                connection.DeviceId, frame.DisplayId ?? 0, frame.Fps ?? 15, frame.Quality ?? 70);
+        }
+        else
+        {
+            log.LogWarning(
+                "Screen stream refused for {Device}: the session agent is not connected, so there is " +
+                "nothing to capture. This is the desktop session agent (the tray icon), not the service.");
+        }
 
         await SendAsync(connection, WsServerFrame.Of("remote.state", frame.Id, new
         {

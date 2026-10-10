@@ -202,6 +202,59 @@ public sealed class MediaController(ILogger<MediaController> log)
         return SendVolumeKey(WinConst.VK_VOLUME_DOWN, repeats, "VolumeDown");
     }
 
+    /// <summary>
+    /// Injects a volume or mute key from the interactive desktop, on behalf of the service.
+    /// <para>
+    /// The service cannot do this itself. It runs in session 0, which has no interactive
+    /// desktop and no audio endpoint: <c>SendInput</c> there either fails outright or goes to a
+    /// desktop nobody is looking at, and Core Audio's <c>GetDefaultAudioEndpoint</c> returns
+    /// nothing, so the volume cannot even be read back. Every volume key therefore has to be
+    /// pressed by the session agent, which runs as the signed-in user (D43).
+    /// </para>
+    /// <para>
+    /// This is the same pairing that already existed for the transport keys. The comment on that
+    /// path said they "are forwarded to the interactive session agent", but nothing forwarded
+    /// them - <see cref="SendTransport"/> ran in the service too, so the note described an intent
+    /// the code did not carry out. Volume and mute were worse: they were not even checked, so
+    /// the phone got a bare <c>409</c> with no reason and had no way to tell a refusal from a
+    /// bug.
+    /// </para>
+    /// </summary>
+    public static MediaActionResponse SendVolumeKeyFromSession(ushort vk, int repeats, string action)
+    {
+        var clamped = Math.Clamp(repeats <= 0 ? DefaultVolumeStep : repeats, 1, 25);
+        var events = new List<INPUT>(clamped * 2);
+        for (var i = 0; i < clamped; i++)
+        {
+            events.Add(KeyEvent(vk, down: true));
+            events.Add(KeyEvent(vk, down: false));
+        }
+
+        var sent = Native.USER32.SendInput((uint)events.Count, events.ToArray(), Marshal.SizeOf<INPUT>());
+        return new MediaActionResponse
+        {
+            Accepted = sent == events.Count,
+            Action = action,
+            Detail = sent == events.Count
+                ? null
+                : $"SendInput delivered {sent} of {events.Count} events from the session agent " +
+                  $"(error {Marshal.GetLastWin32Error()}).",
+        };
+    }
+
+    /// <summary>
+    /// The virtual key for a volume or mute action, for the session agent to inject.
+    /// </summary>
+    public static ushort? VolumeVirtualKey(MediaAction action) => action switch
+    {
+        MediaAction.VolumeUp => WinConst.VK_VOLUME_UP,
+        MediaAction.VolumeDown => WinConst.VK_VOLUME_DOWN,
+        MediaAction.Mute => WinConst.VK_VOLUME_MUTE,
+        MediaAction.Unmute => WinConst.VK_VOLUME_MUTE,
+        MediaAction.ToggleMute => WinConst.VK_VOLUME_MUTE,
+        _ => null,
+    };
+
     private MediaActionResponse SendVolumeKey(ushort vk, int repeats, string action)
     {
         var events = new List<INPUT>(repeats * 2);

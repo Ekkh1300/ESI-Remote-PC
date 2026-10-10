@@ -85,6 +85,19 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
     private long _lastChangeUnixMs;
     private int _framesSinceKeyframe;
 
+    /// <summary>
+    /// How many frames pass between forced full keyframes.
+    /// <para>
+    /// This is the heartbeat of the stream (D46). Without it, a desktop that is not changing
+    /// produces no frame at all: the encoder hashes each tile, finds every one unchanged, and
+    /// returns null. The phone then holds a single correct-but-frozen picture forever, which it
+    /// cannot distinguish from a stream that died - and the only way out was for the user to
+    /// stop and start again. A periodic keyframe costs one redundant frame on a quiet screen,
+    /// which is the harmless direction to fail in.
+    /// </para>
+    /// </summary>
+    private int _keyframeEvery = 30;
+
     private sealed class TileState
     {
         public required long Hash { get; init; }
@@ -136,8 +149,22 @@ public sealed class ScreenStreamEncoder(ILogger<ScreenStreamEncoder> log)
 
         lock (_states)
         {
-            var mustKeyframe = isKeyframe || _framesSinceKeyframe == int.MaxValue ||
-                               _states.Count == 0 || _states.Count != gridCols * gridRows;
+            // D46: a keyframe has to arrive on a timer, not only when one is explicitly
+            // requested. A still desktop is the normal case - the cursor has not moved, nothing
+            // is animating - and the old code produced no frame at all in that situation, so the
+            // phone received exactly one and then never heard from the stream again. The picture
+            // it showed was correct but frozen, with no way to tell a still desktop from a dead
+            // stream, and the only way to unstick it was for the user to press Stop and Start.
+            //
+            // Refreshing periodically costs one full frame per interval on a screen that is not
+            // changing, which is the cheap direction to be wrong in: a repeated keyframe is
+            // invisible, whereas a stale one is indistinguishable from a broken connection.
+            _framesSinceKeyframe++;
+
+            var mustKeyframe = isKeyframe ||
+                               _states.Count == 0 ||
+                               _states.Count != gridCols * gridRows ||
+                               _framesSinceKeyframe >= Math.Max(1, _keyframeEvery);
 
             for (var row = 0; row < gridRows; row++)
             {

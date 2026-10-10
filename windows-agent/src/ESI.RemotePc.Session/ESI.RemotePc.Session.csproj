@@ -34,6 +34,16 @@
       FrameworkReference below already provides it, and referencing both earns a NU1510.
     -->
     <PackageReference Include="Serilog.Sinks.File" />
+
+    <!--
+      NAudio for the phone-as-speaker path. WasapiLoopbackCapture is what captures the
+      system's output audio - the same mechanism Audio Relay uses for the same job - and
+      MMDeviceEnumerator is how the phone picks which device or application to listen to.
+
+      It lives in the session agent rather than the service for the reason the screen capture
+      does: audio has to be captured from the interactive session that owns the audio endpoint.
+    -->
+    <PackageReference Include="NAudio" />
   </ItemGroup>
 
   <ItemGroup>

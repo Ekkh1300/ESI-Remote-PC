@@ -46,7 +46,9 @@ final fileRootsProvider = FutureProvider<FileRoots>((ref) async {
 class FilesNotifier extends Notifier<FilesState> {
   @override
   FilesState build() {
-    unawaited(_openDefault());
+    // Deferred (D45): see metrics.dart. `_openDefault()` reads and writes `state`, and
+    // `build()` must return before either happens.
+    scheduleMicrotask(() => unawaited(_openDefault()));
     return const FilesState();
   }
 

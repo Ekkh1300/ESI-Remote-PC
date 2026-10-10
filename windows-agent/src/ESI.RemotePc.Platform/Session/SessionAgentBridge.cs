@@ -523,6 +523,48 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
             DeviceId = deviceId,
         });
 
+    /// <summary>
+    /// Asks the session agent to inject a volume or mute key. The service runs in session 0,
+    /// where the volume keys go nowhere and Core Audio cannot even be opened to read the volume
+    /// back, so it has to be done by the process that owns the interactive desktop (D43).
+    /// </summary>
+    public bool SendMediaKey(ushort virtualKey, int repeats, string action, string deviceId)
+        => Send(new SessionCommandEnvelope
+        {
+            T = SessionChannelProtocol.Commands.MediaKey,
+            DeviceId = deviceId,
+            VirtualKey = virtualKey,
+            Repeats = repeats,
+            Action = action,
+        });
+
+    /// <summary>
+    /// Asks the session agent to move the volume to an absolute target. The walk has to happen
+    /// there: turning "move to 30" into up and down presses needs the current volume, and reading
+    /// it is one of the things session 0 cannot do (D43).
+    /// </summary>
+    public bool SetMediaVolume(int target, string action, string deviceId)
+        => Send(new SessionCommandEnvelope
+        {
+            T = SessionChannelProtocol.Commands.MediaVolumeSet,
+            DeviceId = deviceId,
+            Repeats = target,
+            Action = action,
+        });
+
+    /// <summary>
+    /// Asks the session agent to inject a transport key. From session 0 the same call reports
+    /// success and reaches a desktop nobody is watching, which is why play and pause looked like
+    /// they worked (D43).
+    /// </summary>
+    public bool SendMediaTransport(string action, string deviceId)
+        => Send(new SessionCommandEnvelope
+        {
+            T = SessionChannelProtocol.Commands.MediaTransport,
+            DeviceId = deviceId,
+            Action = action,
+        });
+
     public bool ShowPairingPrompt(PairingPromptRequest request)
         => Send(new SessionCommandEnvelope
         {

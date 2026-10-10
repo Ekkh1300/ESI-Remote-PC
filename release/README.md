@@ -10,8 +10,8 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  B9237491A61BB832D2EFE39F7D264471E88D54AA75E8C27DCDFD9ACFCD4FDA34
-ESI-RemotePC-1.0.1.apk             A1DD2F155DB4388C52EF9211E4BAB9ECD02C929B5D0FA61A94D67FFDBB0B2216
+ESI-RemotePC-Setup-1.0.1-x64.exe  A75CDFC5D9928BD599A4A0CBFAF6A590D8CF6A6302E94A4FD23043074F4707F9
+ESI-RemotePC-1.0.1.apk             3A2D9D9121A2D062617D42EE9D9B88E6787DE78B5C60C66C4515CE4ACBD64A10
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -576,6 +576,122 @@ The prompt drops the QR entirely when there is nothing to transfer, and says so:
 matches the one on your phone."
 
 **The APK has changed.** Install it once; after that no QR code is involved in pairing at all.
+## D42 - "pressing it does nothing" (Apps, Screen, typing)
+
+Three features reported as dead. The agent was not at fault for any of them, and the evidence for
+that came from instrumenting the WebSocket hub, which had **no logging at all** - so "the message
+never arrived", "it arrived and was refused" and "it arrived and did nothing" were indistinguishable,
+and those are three different bugs with three different fixes.
+
+Once frames were logged, all three turned out to work: `remote.start` started a stream, `remote.key`
+arrived sixteen times, `/apps/launch` returned 200.
+
+## D43 - volume and mute were injected from session 0
+
+`POST /media/{action}` carried its own explanation in a comment:
+
+    // Transport keys are session-bound: injecting them from the service in
+    // session 0 would go nowhere, so they are forwarded to the session agent.
+    if (MediaController.TransportVirtualKey(mediaAction) is not null)
+        return Results.Ok(media.SendTransport(mediaAction));   // <- runs in the service
+
+The comment described an intent the code did not carry out. It called `SendTransport` on the
+**service's own** controller, which runs in session 0. Volume and mute were not even in that check,
+and they inject with `SendInput` too.
+
+The two halves failed differently, which is why this looked like one thing and was two:
+
+| action | what happened | what the phone saw |
+|--------|---------------|-------------------|
+| `volumeSet`, `toggleMute` | `SendInput` failed in session 0 | a bare `409`, 43 times in two seconds |
+| `playPause` | `SendInput` *succeeded* into a desktop nobody was watching | `200`, and nothing happened |
+
+Core Audio is a per-session API, so the service's session 0 gets no endpoint at all: `ReadVolume()`
+returned null and `SetVolume` refused every request - which is why the volume slider sat at 0 and
+could not be moved.
+
+`volumeSet` needs the current volume to turn "move to 30" into a run of key presses, and reading the
+volume is one of the things session 0 cannot do. So the walk is computed in the session agent, where
+Core Audio works, and the service forwards an absolute target.
+
+**What changed:** three commands over the session channel - `media.key`, `media.volumeSet` and
+`media.transport` - and all injection happens in the session agent now. Tests assert the service
+never calls `MediaController` to inject, including the two escape hatches left as dead-but-present
+code, which one of those tests caught.
+
+## D44 - the phone camera, as MJPEG
+
+`/camera/state`, `/camera/latest` and `/camera/stream.mjpg`, plus a one-frame store and
+`FrameTypes.CameraFrame` on the existing binary socket. OBS, VLC and ffmpeg open the stream as an
+ordinary network source.
+
+**There is no virtual webcam device, and there cannot be without a signed kernel driver.** iVCam,
+installed on this machine, signs its `iVCam.sys` with the *Microsoft Windows Hardware
+Compatibility Publisher* certificate; that is what a WHQL-registered capture device costs. MJPEG is
+the honest answer at this scale: no driver, nothing installed on the PC, and it stays inside the
+one `.exe`.
+
+The frames travel over the signed WebSocket and are validated before they are stored - `payloadLength`
+from the wire is checked against what actually arrived before it is used to slice. Only *reading* the
+stored frames is unauthenticated, because MJPEG cannot carry a per-frame signature and its consumers
+cannot add one; what protects the machine, the pairing secret, is unchanged.
+
+The phone half is not written yet, so the server side cannot be exercised end to end.
+
+## D45 - a provider that read its own state before it had any
+
+The Screen tab said:
+
+    Screen control is switched off on the PC - the agent reports that its "remote"
+    capability is disabled. Turn it on in the agent settings on the PC.
+
+Nothing was switched off. The handshake said `remote: true`, and the message pointed at the PC's
+settings rather than at the phone.
+
+`logcat` on the emulator had it:
+
+    Bad state: Tried to read the state of an uninitialized provider.
+    #2 MetricsNotifier.refresh (metrics.dart:79)
+    #4 MetricsNotifier.build   (metrics.dart:29)   <- read it before returning a value
+
+Riverpod does not give a Notifier its `state` until `build()` has returned. Work started inline
+therefore touches `state` while the provider is still uninitialised.
+
+It fails quietly - an unhandled async error does not stop the app, it tears down that one provider.
+And `connection.dart` is what fills in the handshake, so when it threw, `supports('remote')` fell
+through its `?? false` and **a working feature reported itself as a disabled one.**
+
+`connection.dart` already carried a long comment about this exact throw, from an earlier blank-screen
+bug. Nothing guarded it, so the same pattern had spread to eight other providers. All of them now
+`scheduleMicrotask` their startup, and `test/provider_build_order_test.dart` fails if any provider
+goes back to calling `unawaited()` inside `build()`.
+
+## D46 - the screen stream showed black
+
+Three separate faults, found in that order, each hidden by the one before it.
+
+**The tile parser read the wrong layout.** A frame is header, then *all* the descriptors, then *all*
+the payloads. The Dart parser advanced one offset through both, so after the first tile it resumed
+inside the second tile's JPEG. Every tile handed to `android.graphics.ImageDecoder` began
+mid-picture, which it reports as "Input contained an error". It parsed **one** tile out of sixteen.
+PROTOCOL.md 7.5 documented the interleaved layout, so the code and the spec agreed with each other
+and both were wrong; the spec is corrected.
+
+**The parser could not be caught by a fixture.** A hand-built frame would only have proved the parser
+agrees with the fixture - the assumption that had already failed. `test/screen_wire_layout_test.dart`
+reads a frame the real C# encoder produced, and checks that every tile starts with `FF D8` and ends
+with `FF D9`.
+
+**Then the stream went silent.** With parsing fixed, 16 of 16 tiles decoded - and then nothing. The
+encoder is a tile-delta codec: it hashes each tile and skips any that is unchanged, returning null
+when they all match. A still desktop is the normal case, so the phone got one correct frame and
+never heard from the stream again, holding a correct but frozen picture it could not tell from a
+dead one. Keyframes are now forced on a timer, not only on request.
+
+**The silence was invisible from both sides.** The hub had no logging, and the phone swallowed decode
+failures with `on Object {}` while showing `frame 0` - which a zero-tile composite also produces.
+The hub now counts frames per device, and the app says how many tiles arrived and how many decoded.
+
 ## Final verification
 
 Run on the emulator against the live agent, through the app's own UI, with the shipped APK:
@@ -590,7 +706,8 @@ on the pairing screen, then Paired. Every signed endpoint the app touched afterw
 dashboard reported Live, the Power tab reported online - E-K\META PC, and the Apps tab listed
 the catalog. No scan, no camera, one click on the PC.
 
-189 C# tests, 165 Dart tests, lutter analyze clean, publish smoke test 19 of 19. elease\
+189 C# tests, 165 Dart tests, lutter analyze clean, publish smoke test 19 of 19. 
+elease\
 holds exactly one .exe and one .apk and both hashes match this file. The three installed
 binaries are byte-identical to the shipped build.
 

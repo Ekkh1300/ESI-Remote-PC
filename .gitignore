@@ -24,6 +24,11 @@ release/*.msi
 coverage*.xml
 coverage*.json
 
+# Scratch output from the wire probe that produced the frames `screen_wire_layout_test.dart`
+# reads. It is regenerated on demand and is not part of the product; the test names it in a
+# failure message so anyone hitting that knows where to get it.
+_wire/
+
 # NuGet
 *.nupkg
 *.snupkg
@@ -69,3 +74,18 @@ secrets.json
 provisioning-secret
 *.key.pem
 id_ed25519
+
+# The Android release signing key (D47).
+#
+# This one matters more than the entries above it, because it is not merely this project's
+# secret: the APK it signs is what a user's phone treats as "ESI Remote PC". Publishing it would
+# let anyone build an update that the phone accepts as ours, which is the signing key's whole
+# purpose and cannot be revoked by changing a password afterwards.
+#
+# It was present in the working tree and *not* covered by any of the patterns above - the
+# `*.key` and `*.pem` entries do not match `esi-release.jks`, and nothing excluded
+# `key.properties`, which holds the two passwords in plain text.
+android-app/**/android/*.jks
+android-app/**/android/key.properties
+android-app/**/android/*.keystore
+*.jks

@@ -73,6 +73,28 @@ public interface ISessionAgentBridge
     /// <summary>Queues an input event for the session agent to inject.</summary>
     bool QueueInput(RemoteInputRequest input);
 
+    /// <summary>
+    /// Asks the session agent to inject a volume or mute key.
+    /// <para>
+    /// The service cannot do this itself. It runs in session 0, where the keys are injected into
+    /// a desktop nobody is watching, so every volume control came back refused with no reason the
+    /// phone could read (D43).
+    /// </para>
+    /// </summary>
+    bool SendMediaKey(ushort virtualKey, int repeats, string action, string deviceId);
+
+    /// <summary>
+    /// Asks the session agent to move the volume to an absolute target. The walk has to happen
+    /// where the current volume can be read, which is the interactive session and not session 0.
+    /// </summary>
+    bool SetMediaVolume(int target, string action, string deviceId);
+
+    /// <summary>
+    /// Asks the session agent to inject a transport key. Injected from session 0 the call
+    /// succeeds and reaches nothing, so the phone was answered 200 and nothing happened (D43).
+    /// </summary>
+    bool SendMediaTransport(string action, string deviceId);
+
     /// <summary>Asks the session agent to start a screen stream for a device and display.</summary>
     bool RequestCapture(string deviceId, int displayId, int fps, int quality, int gridCols, int gridRows);
 
@@ -258,6 +280,15 @@ public sealed class SessionCommandEnvelope
     public int? GridRows { get; set; }
     public PairingPromptRequest? Prompt { get; set; }
 
+    /// <summary>The virtual key to inject, for <see cref="Commands.MediaKey"/>.</summary>
+    public int? VirtualKey { get; set; }
+
+    /// <summary>How many times to press it, for <see cref="Commands.MediaKey"/>.</summary>
+    public int? Repeats { get; set; }
+
+    /// <summary>The action name to echo back, so the phone's response names it.</summary>
+    public string? Action { get; set; }
+
     /// <summary>
     /// Correlates a follow-up with the request it answers - the pairing attempt id for
     /// <see cref="SessionChannelProtocol.Commands.PairingCompleted"/>, so a prompt can tell
@@ -288,6 +319,25 @@ public static class SessionChannelProtocol
         public const string PairingPrompt = "pairing.prompt";
         public const string PairingCompleted = "pairing.completed";
         public const string LaunchApp = "app.launch";
+
+        /// <summary>
+        /// Injects a volume or mute key from the interactive desktop. Volume keys are
+        /// session-bound just like the transport keys, so the service has to route them through
+        /// the session agent rather than injecting them into its own session 0 (D43).
+        /// </summary>
+        public const string MediaKey = "media.key";
+
+        /// <summary>
+        /// Moves the volume to an absolute target, computed where the volume can be read (D43).
+        /// </summary>
+        public const string MediaVolumeSet = "media.volumeSet";
+
+        /// <summary>
+        /// Injects a transport key from the interactive desktop. These were the quiet half of D43:
+        /// <c>SendInput</c> from session 0 succeeds and reaches nothing, so the phone was told
+        /// 200 and play and pause silently did nothing.
+        /// </summary>
+        public const string MediaTransport = "media.transport";
         public const string TerminateApp = "app.terminate";
         public const string ShowToast = "toast.show";
         public const string SyncNow = "sync.now";

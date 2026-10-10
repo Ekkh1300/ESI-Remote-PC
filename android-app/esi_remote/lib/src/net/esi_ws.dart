@@ -601,24 +601,44 @@ List<ScreenTile> parseScreenTiles(Uint8List frame) {
   }
   final tiles = <ScreenTile>[];
   final view = ByteData.sublistView(frame);
-  var offset = ScreenFrameHeader.size;
+
+  // Two passes over one descriptor table (D46).
+  //
+  // The frame is laid out as header, then ALL the tile descriptors, then ALL the tile payloads
+  // back to back. The old loop advanced a single `offset` through both, so after the first tile
+  // it resumed at 32 + 14 + len - which is inside the second tile's JPEG rather than at its
+  // descriptor. Every subsequent read landed at the wrong place, and the slice handed to
+  // android.graphics.ImageDecoder started mid-picture, which it reports as
+  // "Input contained an error".
+  //
+  // So: read every descriptor first, then walk the payload region once. The descriptor count is
+  // in the header, so the payload region starts at a known offset and the two cannot drift.
+  final descriptors = <({int col, int row, int width, int height, int length})>[];
+  var descriptorOffset = ScreenFrameHeader.size;
+
   for (var i = 0; i < header.tileCount; i++) {
-    if (offset + 14 > frame.length) break;
-    final col = view.getUint16(offset, Endian.little);
-    final row = view.getUint16(offset + 2, Endian.little);
-    final tileWidth = view.getUint16(offset + 4, Endian.little);
-    final tileHeight = view.getUint16(offset + 6, Endian.little);
-    final tileLength = view.getUint32(offset + 8, Endian.little);
-    offset += 14;
-    if (offset + tileLength > frame.length) break;
-    tiles.add(ScreenTile(
-      col: col,
-      row: row,
-      width: tileWidth,
-      height: tileHeight,
-      jpeg: Uint8List.sublistView(frame, offset, offset + tileLength),
+    if (descriptorOffset + 14 > frame.length) break;
+    descriptors.add((
+      col: view.getUint16(descriptorOffset, Endian.little),
+      row: view.getUint16(descriptorOffset + 2, Endian.little),
+      width: view.getUint16(descriptorOffset + 4, Endian.little),
+      height: view.getUint16(descriptorOffset + 6, Endian.little),
+      length: view.getUint32(descriptorOffset + 8, Endian.little),
     ));
-    offset += tileLength;
+    descriptorOffset += 14;
+  }
+
+  var payloadOffset = descriptorOffset;
+  for (final d in descriptors) {
+    if (payloadOffset + d.length > frame.length) break;
+    tiles.add(ScreenTile(
+      col: d.col,
+      row: d.row,
+      width: d.width,
+      height: d.height,
+      jpeg: Uint8List.sublistView(frame, payloadOffset, payloadOffset + d.length),
+    ));
+    payloadOffset += d.length;
   }
   return tiles;
 }

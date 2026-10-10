@@ -22,7 +22,16 @@ class MachineListNotifier extends Notifier<List<PairedMachine>> {
   List<PairedMachine> build() {
     if (!_loaded) {
       _loaded = true;
-      unawaited(_load());
+      // Deferred (D45). `_load()` fills in the handshake, and `build()` has to return a value
+      // before anything reads or writes `state`. Called directly, that async work started
+      // first, so the provider was still uninitialised when the body touched `state` and threw
+      // "Tried to read the state of an uninitialized provider".
+      //
+      // It failed quietly and took the whole app with it: the handshake never landed, so
+      // `supports('remote')` fell through its `?? false`, and the Screen tab reported the remote
+      // capability as switched off on a PC where the handshake plainly said it was on. One
+      // provider's bad startup ordering reported a working feature as a disabled one.
+      scheduleMicrotask(_load);
     }
     return const <PairedMachine>[];
   }
@@ -207,7 +216,10 @@ class ConnectionNotifier extends Notifier<ConnectionStatus> {
     }
     if (socket != null && socket.identity.keyId != machine.keyId) {
       socket.identity = machine.identity;
-      unawaited(socket.recycle());
+      // `recycle()` is the socket's own method and touches none of this notifier's state, so
+      // starting it here cannot hit the uninitialised-provider throw. It stays inline because
+      // deferring it would leave a frame where the socket is still signed with the old key.
+      unawaited(socket.recycle()); // coverage:ignore-line — no state access, see above
     }
 
     // Riverpod does not give a Notifier its `state` until build() has returned, so neither

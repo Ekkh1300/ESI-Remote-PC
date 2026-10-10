@@ -22,8 +22,12 @@ class GamingNotifier extends Notifier<AsyncSlice<GamingState>> {
   @override
   AsyncSlice<GamingState> build() {
     ref.onDispose(() => _stream?.cancel());
-    unawaited(refresh());
-    unawaited(_watch());
+    // Deferred (D45): see metrics.dart. Both of these read and write `state`, and `build()` must
+    // return a value before any of it runs.
+    scheduleMicrotask(() {
+      unawaited(refresh());
+      unawaited(_watch());
+    });
     return const AsyncSlice<GamingState>.busy();
   }
 
@@ -224,7 +228,7 @@ final appActionsProvider = Provider<AppActions>(AppActions.new);
 class MediaNotifier extends Notifier<AsyncSlice<MediaState>> {
   @override
   AsyncSlice<MediaState> build() {
-    unawaited(refresh());
+    scheduleMicrotask(() => unawaited(refresh())); // Deferred (D45)
     return const AsyncSlice<MediaState>.busy();
   }
 
@@ -282,8 +286,11 @@ class NotificationNotifier extends Notifier<AsyncSlice<NotificationPage>> {
   @override
   AsyncSlice<NotificationPage> build() {
     ref.onDispose(() => _stream?.cancel());
-    unawaited(refresh());
-    unawaited(_watch());
+    // Deferred (D45): see metrics.dart.
+    scheduleMicrotask(() {
+      unawaited(refresh());
+      unawaited(_watch());
+    });
     return const AsyncSlice<NotificationPage>.busy();
   }
 
@@ -344,7 +351,7 @@ final notificationsProvider =
 class NotificationRulesNotifier extends Notifier<AsyncSlice<List<NotificationRule>>> {
   @override
   AsyncSlice<List<NotificationRule>> build() {
-    unawaited(refresh());
+    scheduleMicrotask(() => unawaited(refresh())); // Deferred (D45)
     return const AsyncSlice<List<NotificationRule>>.busy();
   }
 
@@ -390,7 +397,7 @@ final notificationRulesProvider =
 class SettingsNotifier extends Notifier<AsyncSlice<AgentSettings>> {
   @override
   AsyncSlice<AgentSettings> build() {
-    unawaited(refresh());
+    scheduleMicrotask(() => unawaited(refresh())); // Deferred (D45)
     return const AsyncSlice<AgentSettings>.busy();
   }
 

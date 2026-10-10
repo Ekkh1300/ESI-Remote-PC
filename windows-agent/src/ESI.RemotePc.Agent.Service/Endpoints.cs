@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using Esi.Platform.Apps;
+using Esi.Platform.Camera;
 using Esi.Platform.Capture;
 using Esi.Platform.Discovery;
 using Esi.Platform.Files;
@@ -790,14 +791,23 @@ public static class Endpoints
         api.MapGet("/apps", ([FromServices] AppService apps) => Results.Ok(apps.List()));
         api.MapGet("/apps/running", ([FromServices] AppService apps) => Results.Ok(apps.Running()));
 
-        api.MapPost("/apps/launch", async (HttpContext context, LaunchAppRequest request, [FromServices] AppService apps) =>
+        api.MapPost("/apps/launch", async (HttpContext context, LaunchAppRequest request, [FromServices] AppService apps,
+            [FromServices] AuditLog audit) =>
         {
             var ctx = RequestContextMiddleware.Get(context);
             var result = apps.Launch(request, ctx.Device!.DeviceId);
 
+            // Every launch is recorded, whatever the outcome. The 409 carries a reason the phone
+            // shows, but nothing was kept anywhere, so a launch that quietly did nothing left no
+            // trace at all - and the next question was always "did it even arrive?" (D42).
+            audit.Record(AuditLog.ActionAppLaunched, result.Launched ? "ok" : "refused",
+                deviceId: ctx.Device!.DeviceId, deviceName: ctx.Device.Name,
+                remoteAddress: ctx.RemoteAddressText,
+                detail: $"{request.Id} -> {(result.Launched ? $"pid {result.ProcessId}" : result.Detail)}");
+
             return result.Launched
-                ? Results.Ok(result)
-                : Results.Json(result, statusCode: StatusCodes.Status409Conflict);
+            ? Results.Ok(result)
+            : Results.Json(result, statusCode: StatusCodes.Status409Conflict);
         });
 
         api.MapPost("/apps/{id}/terminate", (string id, [FromServices] AppService apps) => Results.Ok(apps.Terminate(id, force: false)));
@@ -944,6 +954,11 @@ public static class Endpoints
 
             // Transport keys are session-bound: injecting them from the service in
             // session 0 would go nowhere, so they are forwarded to the session agent.
+            //
+            // The comment above described the intent, but the body did not carry it out - it
+            // called media.SendTransport on the service's own controller, which is the session-0
+            // injector. From there SendInput succeeds and reaches nothing, so the phone got 200
+            // and play and pause quietly did nothing (D43).
             if (MediaController.TransportVirtualKey(mediaAction) is not null)
             {
                 if (!session.IsConnected)
@@ -957,23 +972,102 @@ public static class Endpoints
                     }, statusCode: StatusCodes.Status409Conflict);
                 }
 
-                return Results.Ok(media.SendTransport(mediaAction));
+                var ctx = RequestContextMiddleware.Get(context);
+                if (!session.SendMediaTransport(mediaAction.ToString(), ctx.Device?.DeviceId ?? "unknown"))
+                {
+                    return Results.Json(new MediaActionResponse
+                    {
+                        Accepted = false,
+                        Action = normalized,
+                        Detail = "The session agent did not accept the media command.",
+                    }, statusCode: StatusCodes.Status409Conflict);
+                }
+
+                var afterTransport = media.GetState();
+                return Results.Ok(new MediaActionResponse
+                {
+                    Accepted = true,
+                    Action = normalized,
+                    Volume = afterTransport.Volume,
+                    IsMuted = afterTransport.IsMuted,
+                });
             }
 
-            var result = mediaAction switch
+            // Volume and mute keys are session-bound too - they are injected with SendInput, and the
+            // service sits in session 0 with no interactive desktop and no Core Audio endpoint.
+            // They were missing from this check, so they were pressed from session 0, went
+            // nowhere, and came back as a bare 409 that the phone could not explain (D43).
+            //
+            // volumeSet is handed over as an absolute target rather than as a run of presses,
+            // because turning "move to 30" into presses needs the current volume - and reading
+            // that is exactly what session 0 cannot do. The session agent owns the walk.
+            if (IsVolumeControl(mediaAction))
             {
-                MediaAction.VolumeUp => media.VolumeUp(body.Step ?? 5),
-                MediaAction.VolumeDown => media.VolumeDown(body.Step ?? 5),
-                MediaAction.VolumeSet => media.SetVolume(body.Volume ?? 50),
-                MediaAction.Mute => media.Mute(true),
-                MediaAction.Unmute => media.Mute(false),
-                MediaAction.ToggleMute => media.ToggleMute(),
-                _ => new MediaActionResponse { Accepted = false, Action = normalized, Detail = "Unsupported action." },
-            };
+                if (!session.IsConnected)
+                {
+                    return Results.Json(new MediaActionResponse
+                    {
+                        Accepted = false,
+                        Action = normalized,
+                        Detail = "Volume keys must be pressed from the interactive desktop. " +
+                                 "Log in to the PC, or start 'ESI Remote PC Session'.",
+                    }, statusCode: StatusCodes.Status409Conflict);
+                }
 
-            return result.Accepted ? Results.Ok(result) : Results.Json(result, statusCode: StatusCodes.Status409Conflict);
+                var ctx = RequestContextMiddleware.Get(context);
+                var sent = mediaAction == MediaAction.VolumeSet
+                    ? session.SetMediaVolume(Math.Clamp(body.Volume ?? 50, 0, 100), normalized,
+                        ctx.Device?.DeviceId ?? "unknown")
+                    : session.SendMediaKey(
+                        MediaController.VolumeVirtualKey(mediaAction)!.Value,
+                        mediaAction is MediaAction.Mute or MediaAction.Unmute or MediaAction.ToggleMute
+                            ? 1
+                            : Math.Clamp(body.Step ?? 5, 1, 25),
+                        normalized, ctx.Device?.DeviceId ?? "unknown");
+
+                if (!sent)
+                {
+                    return Results.Json(new MediaActionResponse
+                    {
+                        Accepted = false,
+                        Action = normalized,
+                        Detail = "The session agent did not accept the volume command.",
+                    }, statusCode: StatusCodes.Status409Conflict);
+                }
+
+                // Read after the keys land, so the phone shows where the PC actually is rather
+                // than the number it asked for.
+                var after = media.GetState();
+                return Results.Ok(new MediaActionResponse
+                {
+                    Accepted = true,
+                    Action = normalized,
+                    Volume = after.Volume,
+                    IsMuted = after.IsMuted,
+                });
+            }
+
+            // Both guards above have now claimed every action the enum defines - the transport ones and the
+            // volume ones - so reaching here means the request named an action that exists but
+            // routes nowhere. Injecting it here would be the session-0 mistake again, so it is
+            // refused with a reason instead. A test asserts this switch never grows an arm that
+            // calls into MediaController on the service's own behalf.
+            return Results.Json(new MediaActionResponse
+            {
+                Accepted = false,
+                Action = normalized,
+                Detail = $"'{normalized}' has no route to the interactive desktop.",
+            }, statusCode: StatusCodes.Status409Conflict);
         });
     }
+
+    /// <summary>
+    /// True for the actions that end up pressing a volume or mute key, which therefore have to be
+    /// injected by the session agent rather than the service's own session 0 (D43).
+    /// </summary>
+    private static bool IsVolumeControl(MediaAction action) => action
+        is MediaAction.VolumeUp or MediaAction.VolumeDown or MediaAction.VolumeSet
+        or MediaAction.Mute or MediaAction.Unmute or MediaAction.ToggleMute;
 
     // =============================================================================
     // Notifications
@@ -1049,6 +1143,120 @@ public static class Endpoints
     // =============================================================================
     // Remote control
     // =============================================================================
+
+    // ============================================================================
+    // Camera
+    // ============================================================================
+
+    /// <summary>
+    /// A phone's camera, exposed two ways: a still frame for the app to poll, and an MJPEG
+    /// stream any program on the network can open as a camera source.
+    /// <para>
+    /// The stream is deliberately unauthenticated, and that is a real trade rather than an
+    /// oversight. MJPEG has no way to carry a per-frame signature, and the consumers this exists
+    /// for - OBS, VLC, ffmpeg - cannot add one, so requiring the request signature would mean
+    /// only our own client could ever watch it. Anyone who can already reach the agent over the
+    /// network is inside the trust boundary this product has always had; the pairing secret is
+    /// what protects the machine, and that is unchanged. What is protected is the camera feed's
+    /// availability, not its confidentiality.
+    /// </para>
+    /// <para>
+    /// The frames themselves arrive over the signed WebSocket, so a phone cannot push video
+    /// without being a paired device with the control scope. Only the reading of the stored
+    /// frames is open.
+    /// </para>
+    /// </summary>
+    public static void MapCamera(IEndpointRouteBuilder endpoints)
+    {
+        var api = Api(endpoints);
+
+        api.MapGet("/camera/state", (HttpContext context, [FromServices] CameraFrameStore cameras) =>
+        {
+            var deviceId = RequestContextMiddleware.Get(context).Device!.DeviceId;
+            var latest = cameras.Latest(deviceId);
+            return Results.Ok(new
+            {
+                live = cameras.IsLive(deviceId),
+                width = latest?.Width ?? 0,
+                height = latest?.Height ?? 0,
+                ageMs = latest is null ? (long?)null : (long)(DateTimeOffset.UtcNow - latest.CapturedAt).TotalMilliseconds,
+                streamUrl = $"/api/v1/camera/stream.mjpg",
+            });
+        });
+
+        api.MapGet("/camera/latest", (HttpContext context, [FromServices] CameraFrameStore cameras) =>
+        {
+            var deviceId = RequestContextMiddleware.Get(context).Device!.DeviceId;
+            var latest = cameras.Latest(deviceId);
+            return latest is null ? Results.NotFound() : Results.File(latest.Jpeg, "image/jpeg");
+        });
+
+        api.MapGet("/camera/stream.mjpg", async (HttpContext context, [FromServices] CameraFrameStore cameras) =>
+        {
+            var deviceId = RequestContextMiddleware.Get(context)?.Device?.DeviceId ?? "unknown";
+
+            context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+            context.Response.Headers.Pragma = "no-cache";
+            context.Response.ContentType = "multipart/x-mixed-replace; boundary=frame";
+
+            await using var stream = context.Response.BodyWriter.AsStream();
+            var seen = 0L;
+
+            // Poll rather than subscribe. The store is a one-frame slot, so there is nothing to
+            // await - the loop simply asks for whatever is newest. A condition variable would wake
+            // sooner but needs a second subscription path and a broadcast, for a difference no
+            // viewer of a 15fps camera could see.
+            while (!context.RequestAborted.IsCancellationRequested)
+            {
+                var frame = cameras.Latest(deviceId);
+
+                if (frame is null)
+                {
+                    if (seen != 0)
+                    {
+                        // Say out loud that the camera stopped rather than closing silently,
+                        // which a viewer reads as "the stream ended" and does not retry.
+                        await WriteBoundaryAsync(stream, "camera stopped", null);
+                        seen = 0;
+                    }
+
+                    await Task.Delay(200, context.RequestAborted);
+                    continue;
+                }
+
+                // Only send a frame when it is a new one, not on every poll.
+                if (frame.CapturedAt.UtcTicks != seen)
+                {
+                    seen = frame.CapturedAt.UtcTicks;
+                    await WriteBoundaryAsync(stream, $"{frame.Width}x{frame.Height}", frame.Jpeg);
+                    await stream.FlushAsync(context.RequestAborted);
+                }
+
+                await Task.Delay(33, context.RequestAborted);
+            }
+        });
+
+        return;
+
+        static async Task WriteBoundaryAsync(Stream stream, string header, byte[]? jpeg)
+        {
+            if (jpeg is null)
+            {
+                await stream.WriteAsync(Ascii("--frame\r\nContent-Type: text/plain\r\n\r\n"));
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(header));
+                await stream.WriteAsync("\r\n"u8.ToArray());
+                await stream.FlushAsync();
+                return;
+            }
+
+            await stream.WriteAsync(Ascii("--frame\r\n"));
+            await stream.WriteAsync(Ascii($"Content-Type: image/jpeg\r\nContent-Length: {jpeg.Length}\r\n\r\n"));
+            await stream.WriteAsync(jpeg);
+            await stream.WriteAsync(Ascii("\r\n"));
+        }
+
+        static byte[] Ascii(string value) => System.Text.Encoding.ASCII.GetBytes(value);
+    }
 
     public static void MapRemote(IEndpointRouteBuilder endpoints)
     {

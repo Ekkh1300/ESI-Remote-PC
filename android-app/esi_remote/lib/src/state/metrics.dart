@@ -26,7 +26,20 @@ class MetricsNotifier extends Notifier<MetricsState> {
       _errors?.cancel();
       _fallbackTimer?.cancel();
     });
-    unawaited(_start());
+    // Deferred on purpose (D45). `_start()` reads and writes `state`, and calling it straight
+    // from `build()` starts that work before `build()` has returned its first value - so
+    // `refresh()` reached `state` while the provider was still uninitialised and threw
+    // "Tried to read the state of an uninitialized provider".
+    //
+    // Nothing caught it: an unhandled async error does not stop the app, it just tears down
+    // this provider. Which is why the Screen tab then claimed the "remote" capability was
+    // switched off - `connection.handshake` was never populated, `supports('remote')` fell
+    // through its `?? false`, and a perfectly working feature reported itself as disabled.
+    // One uninitialised provider took the whole screen with it.
+    //
+    // Scheduling after the microtask queue drains means `build()` has returned and the provider
+    // owns a state before anything touches it.
+    scheduleMicrotask(_start);
     return const MetricsState();
   }
 
@@ -209,7 +222,9 @@ final systemInfoProvider = FutureProvider<SystemInfo?>((ref) async {
 class PowerNotifier extends Notifier<AsyncSlice<PowerStatus>> {
   @override
   AsyncSlice<PowerStatus> build() {
-    unawaited(refresh());
+    // Deferred (D45): see MetricsNotifier above. `refresh()` assigns to `state`, and build()
+    // has to return before there is a state to assign to.
+    scheduleMicrotask(() => unawaited(refresh()));
     return const AsyncSlice<PowerStatus>.busy();
   }
 
