@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  A748DC7EFEE337C7ADDB846F576E170F8994190FBB8E052EE292E05B7FF52480
+ESI-RemotePC-Setup-1.0.1-x64.exe  FCEEE89E9AD769C9D7C4FC2FA95AF81BD3893034BCA1A93B9F54D65C2CCF70FD
 ESI-RemotePC-1.0.1.apk             7130A558E2537F4342056A1EEE352655DA04608EFA8D5CE5F6405E67D17B4704
 ```
 
@@ -736,6 +736,43 @@ Screen capture loop is running (601 iterations)
 ```
 
 **What is not shown in that screenshot is the desktop, and it is black.** The pixel probe reports mean
+
+## D49: the black screen, and the reason two days of logs did not show it
+
+The stream ran, the agent reported it started, the session agent sent a keyframe every two
+seconds, and the phone decoded all sixteen tiles - of a black rectangle. Nothing failed.
+Nothing logged. Nothing threw. Every layer reported that it was working.
+
+`GdiScreenCaptureProvider` built a memory DC, selected a bitmap from `CreateCompatibleBitmap`,
+blitted the screen into it, and read it back with `GetDIBits`. On this machine that sequence
+returns TRUE, sets no error, and writes nothing. So the capture reported success and handed
+back eight megabytes of zeroes, which the encoder compressed into a very small and very valid
+JPEG of an empty screen.
+
+The destination was the problem, and the evidence is one table. Measured in a single process,
+at a single moment, from the same `GetDC(NULL)`:
+
+| BitBlt destination | result | mean brightness | distinct colours |
+|---|---|---|---|
+| `CreateCompatibleBitmap` (a DDB) | `BitBlt OK` | **0.00** | 1 |
+| GDI+ 32bpp bitmap (a DIB section) | `BitBlt OK` | **25.93** | 64 |
+
+A 32bpp ARGB GDI+ bitmap is a DIB section. A DDB is not, and this display driver does not
+blit into one. The provider now captures through GDI+ and reads the pixels out under
+`LockBits`. Roughly eighty lines of P/Invoke and three failure modes gone, replaced by the
+sequence that `Graphics.CopyFromScreen` already uses.
+
+**Why the logs could not show it.** The signature that eventually gave D46 away - one frame,
+always the same size - was also present here: a uniform black screen compresses to almost
+nothing, so a keyframe of nothing is a few kilobytes. The two faults looked identical in the
+one place they left a trace. What separated them was measuring the pixels rather than the
+frame count: `mean brightness 0.00` across 2,073,600 sampled pixels is not a slow start, it
+is an empty screen.
+
+**Verified end to end.** The Stream panel on a paired phone now shows the PC desktop, with
+`frame 119 · 1920×1080 · 16/16 tiles`. After the fix the same probe reports mean brightness
+24.94 with 95.23% non-black pixels.
+
 brightness `0.00` with a single distinct colour across 2,073,600 sampled pixels. Capture is returning a
 correct frame of a screen with nothing on it. On a machine with a visible desktop the same build shows
 the desktop; the wire, the tile parsing and the decode are all confirmed working, and the picture is the

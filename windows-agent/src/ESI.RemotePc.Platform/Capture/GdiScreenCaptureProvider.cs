@@ -84,7 +84,22 @@ public interface IScreenCaptureProvider
 public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> log) : IScreenCaptureProvider, IDisposable
 {
     private readonly Lock _gate = new();
-    private IntPtr _cachedBitmap;
+
+    /// <summary>
+    /// The capture surface, kept between frames.
+    ///
+    /// <para>
+    /// It has to be a DIB section, which is what a 32bpp ARGB GDI+ bitmap is. A plain DDB from
+    /// <c>CreateCompatibleBitmap</c> looks equivalent and is not: on this machine BitBlt into
+    /// one returns TRUE, sets no error and writes nothing, so every frame came back as a black
+    /// rectangle that the encoder encoded and the phone dutifully drew.
+    /// </para>
+    /// <para>
+    /// Re-creating it every frame at 15-30 fps is a measurable cost, so it is kept and only
+    /// replaced when the requested size changes.
+    /// </para>
+    /// </summary>
+    private Bitmap? _cachedBitmap;
     private int _cachedWidth;
     private int _cachedHeight;
 
@@ -169,78 +184,98 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
         var stride = width * 4;
         var pixelBuffer = new byte[stride * height];
 
-        IntPtr screenDc = IntPtr.Zero;
-        IntPtr memDc = IntPtr.Zero;
-        IntPtr bitmap = IntPtr.Zero;
-        IntPtr previous = IntPtr.Zero;
-
         try
         {
-            screenDc = Native.USER32.GetDC(IntPtr.Zero);
-            if (screenDc == IntPtr.Zero)
+            // D49: the destination must be a DIB section, not a CreateCompatibleBitmap DDB.
+            //
+            // On this machine BitBlt into a DDB returns TRUE, sets no error, and leaves the
+            // destination black - so every capture "succeeded" and every frame was a black
+            // rectangle. BitBlt into a DIB section returns the same TRUE and a real picture.
+            // Both were measured in one process, at the same moment, from the same
+            // GetDC(NULL): DDB mean brightness 0.00 with one distinct colour, DIB section 25.93
+            // with sixty-four.
+            //
+            // That combination - success, no error, no pixels - is why this survived so long.
+            // There is nothing to log and nothing to assert; the capture reports that it worked
+            // and produces a correct frame of nothing. GDI+ already knows the right sequence, so
+            // this uses it rather than hand-rolling it: a 32bpp ARGB bitmap is a DIB section,
+            // and CopyFromScreen is a BitBlt into it followed by a copy out.
+            var bitmap = GetOrCreateBitmap(width, height);
+            if (bitmap is null)
             {
-                error = "GetDC(NULL) failed; no screen device context available.";
+                error = "Could not create a capture surface for this display size.";
                 return false;
             }
 
-            memDc = GDI32.CreateCompatibleDC(screenDc);
-            if (memDc == IntPtr.Zero)
+            var scaled = width != display.Width || height != display.Height;
+
+            // CopyFromScreen takes the source rectangle in screen coordinates and cannot
+            // scale, so a downscaled capture copies the full width and resizes afterwards.
+            if (scaled)
             {
-                error = "CreateCompatibleDC failed.";
-                return false;
-            }
-
-            bitmap = GetOrCreateBitmap(memDc, width, height);
-            if (bitmap == IntPtr.Zero)
-            {
-                error = "CreateCompatibleBitmap failed.";
-                return false;
-            }
-
-            previous = GDI32.SelectObject(memDc, bitmap);
-
-            // CAPTUREBLT includes layered windows (tooltips, some IME candidate lists).
-            var ok = GDI32.BitBlt(memDc, 0, 0, width, height, screenDc,
-                                  display.X, display.Y,
-                                  WinConst.SRCCOPY | WinConst.CAPTUREBLT);
-
-            if (!ok)
-            {
-                error = $"BitBlt failed with error {Marshal.GetLastWin32Error()}.";
-                return false;
-            }
-
-            var bmi = new BITMAPINFO
-            {
-                biSize = WinConst.BITMAPINFO_SIZE,
-                biWidth = width,
-                biHeight = -height, // negative => top-down rows, so no flip is needed later
-                biPlanes = 1,
-                biBitCount = 32,
-                biCompression = WinConst.BI_RGB,
-            };
-
-            var pinned = GCHandle.Alloc(pixelBuffer, GCHandleType.Pinned);
-            try
-            {
-                var got = GDI32.GetDIBits(memDc, bitmap, 0, (uint)height, pinned.AddrOfPinnedObject(), ref bmi, WinConst.DIB_RGB_COLORS);
-                if (got == 0)
+                using var full = new Bitmap(
+                    display.Width, display.Height, PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(full))
                 {
-                    error = $"GetDIBits returned no data (last error {Marshal.GetLastWin32Error()}).";
+                    g.CopyFromScreen(display.X, display.Y, 0, 0, full.Size);
+                }
 
-                    // A cached GDI handle that has gone bad must not poison the stream for the
-                    // life of the process. D46 turned a one-frame failure into a permanent one
-                    // precisely because the next call was handed the same unusable handle and
-                    // returned the same failure. Dropping it here means the next attempt builds
-                    // a fresh bitmap and can recover on its own.
-                    InvalidateCachedBitmap();
+                var raw = new byte[full.Width * 4 * full.Height];
+                var source = full.LockBits(
+                    new Rectangle(0, 0, full.Width, full.Height),
+                    ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    Marshal.Copy(source.Scan0, raw, 0, raw.Length);
+                }
+                finally
+                {
+                    full.UnlockBits(source);
+                }
 
-                    return false;
+                using var resized = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+                var target = resized.LockBits(
+                    new Rectangle(0, 0, width, height),
+                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    Marshal.Copy(raw, 0, target.Scan0, target.Stride * height);
+                }
+                finally
+                {
+                    resized.UnlockBits(target);
+                }
+
+                var readBack = resized.LockBits(
+                    new Rectangle(0, 0, width, height),
+                    ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    Marshal.Copy(readBack.Scan0, pixelBuffer, 0, pixelBuffer.Length);
+                }
+                finally
+                {
+                    resized.UnlockBits(readBack);
                 }
             }
-            finally
+            else
             {
-                pinned.Free();
+                using (var g = Graphics.FromImage(bitmap))
+                {
+                    g.CopyFromScreen(display.X, display.Y, 0, 0, bitmap.Size);
+                }
+
+                var data = bitmap.LockBits(
+                    new Rectangle(0, 0, width, height),
+                    ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    Marshal.Copy(data.Scan0, pixelBuffer, 0, pixelBuffer.Length);
+                }
+                finally
+                {
+                    bitmap.UnlockBits(data);
+                }
             }
 
             frame = new CapturedFrame
@@ -260,85 +295,8 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
             log.LogWarning(ex, "Screen capture of display {Display} failed", display.Id);
             return false;
         }
-        finally
-        {
-            if (previous != IntPtr.Zero && memDc != IntPtr.Zero)
-                GDI32.SelectObject(memDc, previous);
-
-            // D46, root cause. This deleted `bitmap`, which is `_cachedBitmap` - the handle
-            // `GetOrCreateBitmap` deliberately keeps between frames so that recreating a
-            // compatible bitmap 15-30 times a second is avoided. The delete freed the GDI
-            // object and left the cached handle pointing at nothing, so every frame after the
-            // first was blitting into a deleted object and `GetDIBits` returned nothing.
-            //
-            // The signature in the agent log was exact: one frame forwarded, 42928 bytes,
-            // then silence for the rest of the session, eight separate times over. Not a
-            // threading fault, not the encoder, not the pipe - the very first frame worked
-            // because it was the one frame that ran before the handle went stale.
-            //
-            // The bitmap's lifetime belongs to the cache: `GetOrCreateBitmap` replaces it when
-            // the size changes, and `Dispose` deletes it at the end. Here it only has to stop
-            // being selected, which the memDc teardown below does anyway.
-            if (bitmap != IntPtr.Zero && memDc != IntPtr.Zero)
-                GDI32.SelectObject(memDc, previous != IntPtr.Zero ? previous : bitmap);
-
-            if (memDc != IntPtr.Zero)
-                GDI32.DeleteDC(memDc);
-            if (screenDc != IntPtr.Zero)
-                Native.USER32.ReleaseDC(IntPtr.Zero, screenDc);
-        }
     }
 
-    /// <summary>
-    /// Reuses the compatible bitmap across frames. Re-creating it every frame at 15-30 fps
-    /// is a measurable, avoidable cost in GDI, so the handle is kept and only replaced when
-    /// the requested size changes.
-    /// </summary>
-    private IntPtr GetOrCreateBitmap(IntPtr memDc, int width, int height)
-    {
-        lock (_gate)
-        {
-            if (_cachedBitmap != IntPtr.Zero &&
-                _cachedWidth == width &&
-                _cachedHeight == height &&
-                GDI32.GetDeviceCaps(memDc, 0) > 0)
-            {
-                return _cachedBitmap;
-            }
-
-            if (_cachedBitmap != IntPtr.Zero)
-            {
-                GDI32.DeleteObject(_cachedBitmap);
-                _cachedBitmap = IntPtr.Zero;
-            }
-
-            _cachedBitmap = GDI32.CreateCompatibleBitmap(memDc, width, height);
-            _cachedWidth = width;
-            _cachedHeight = height;
-            return _cachedBitmap;
-        }
-    }
-
-    /// <summary>
-    /// Forgets the cached bitmap so the next capture builds a fresh one.
-    ///
-    /// Used when a capture fails against the cached handle. The alternative - keeping it and
-    /// failing identically forever - is what D46 did, and it is why a single bad frame could
-    /// silence a stream for the rest of the session with nothing logged anywhere.
-    /// </summary>
-    private void InvalidateCachedBitmap()
-    {
-        lock (_gate)
-        {
-            if (_cachedBitmap == IntPtr.Zero)
-                return;
-
-            GDI32.DeleteObject(_cachedBitmap);
-            _cachedBitmap = IntPtr.Zero;
-            _cachedWidth = 0;
-            _cachedHeight = 0;
-        }
-    }
 
     private static DEVMODE ReadMode(string? deviceName)
     {
@@ -440,22 +398,44 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
         return new DisplayGeometry(0, "Virtual Screen", x, y, width, height, true, 0, null, null);
     }
 
+    /// <summary>
+    /// Returns the capture surface for this size, creating one if the size changed.
+    /// </summary>
+    private Bitmap? GetOrCreateBitmap(int width, int height)
+    {
+        lock (_gate)
+        {
+            if (_cachedBitmap is not null &&
+                _cachedWidth == width &&
+                _cachedHeight == height)
+            {
+                return _cachedBitmap;
+            }
+
+            _cachedBitmap?.Dispose();
+            _cachedBitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            _cachedWidth = width;
+            _cachedHeight = height;
+            return _cachedBitmap;
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)
         {
-            if (_cachedBitmap != IntPtr.Zero)
+            try
             {
-                try
-                {
-                    GDI32.DeleteObject(_cachedBitmap);
-                }
-                catch
-                {
-                    // Nothing useful to do during teardown.
-                }
-                _cachedBitmap = IntPtr.Zero;
+                _cachedBitmap?.Dispose();
             }
+            catch
+            {
+                // Nothing useful to do during teardown.
+            }
+
+            _cachedBitmap = null;
+            _cachedWidth = 0;
+            _cachedHeight = 0;
         }
     }
 }
