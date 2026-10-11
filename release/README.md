@@ -11,7 +11,7 @@ SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.1-x64.exe  FCEEE89E9AD769C9D7C4FC2FA95AF81BD3893034BCA1A93B9F54D65C2CCF70FD
-ESI-RemotePC-1.0.1.apk             8EBBABAF1E30F990C72230F8B4ED35AA766A48813E65252DD8A4EC021195B83D
+ESI-RemotePC-1.0.1.apk             A408ECC1DD73C0B613FCB0C7D82D4D6B3274432790C9E05C14152EA4D143B417
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -820,3 +820,49 @@ the app reports in its pairing request. The APK was rebuilt and read back with 
 
 Pairing does not need a QR code in this version. The phone creates its own one-time secret and sends it with
 the request, so the sequence is **Pair, check the code matches, Allow this device**.
+
+## D51: input did nothing, and the stream settings did nothing either
+
+Three reports came in at once: lag, typing that does not type, buttons that do not press. Two
+of them had one cause, and it was not subtle once the wire format was read against the
+protocol.
+
+`EsiWsFrame.encode()` emitted only `p`, `t`, `id` and `data`. It dropped every other field the
+class held. So the phone could not send `code` at all - it had nowhere to send it.
+
+The fields it did have were being stuffed into `data` instead. PROTOCOL.md §7.2 puts them at
+the top level, and `WsClientFrame` reads them from there:
+
+```json
+{ "p":1, "t":"remote.key",   "code":"KeyA", "text":"a", "down":true, "mods":["ctrl"] }
+{ "p":1, "t":"remote.input", "id":"r3", "input": { ".": "see 7.3" } }
+{ "p":1, "t":"remote.start", "displayId":0, "fps":15, "quality":65, "grid":[4,4],
+                      "inputEnabled":true }
+```
+
+`[JsonPropertyName("code")]`, `[JsonPropertyName("input")]`, `[JsonPropertyName("fps")]` and the
+rest are all top-level. There is no field anywhere on the server for a nested blob, so:
+
+| the phone sent | the server read | result |
+|---|---|---|
+| `data: {code, down, mods, text}` | `frame.Code` = null | `No virtual-key mapping for code (null)`, dropped |
+| `data: {kind: mouseButton, ...}` | `frame.Input` = null | `No input payload was supplied.` |
+| `data: {fps, quality, grid}` | `frame.Fps` = null | every setting ignored, agent defaults used |
+
+The session agent log said it outright, once per keystroke, at Debug:
+
+```
+[DBG] : No virtual-key mapping for code (null)
+```
+
+So typing did nothing, clicks on the mirrored screen were rejected, and the frame rate, JPEG
+quality and tile grid the user set were all silently discarded. The last one is part of the lag
+complaint too: the settings that would have reduced it were never being applied.
+
+`encode()` now writes `code`, `text`, `down`, `mods`, `input` and the `remote.start` parameters
+at the top level, and `EsiWsFrame` models the four fields it had no place for.
+
+**Two tests were holding the bug in place.** `protocol_shapes_test.dart` asserted
+`parsed.data['displayId']` and `parsed.data['code']` - checking our own model against itself
+rather than the encoded bytes. It was written to prove the frame shape and it proved the wrong
+shape. Both now decode the JSON directly and assert on the wire.

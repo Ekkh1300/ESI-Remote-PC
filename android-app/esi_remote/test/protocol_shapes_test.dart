@@ -260,30 +260,68 @@ void main() {
       expect(parsed.id, 'p1');
     });
 
-    test('encodes remote.start with the fields §7.2 lists', () {
-      final parsed = EsiWsFrame.parse(
-        EsiWsFrame.remoteStart(id: 'r1', displayId: 1, fps: 20, quality: 80).encode(),
-      );
-      expect(parsed.type, 'remote.start');
-      expect(parsed.data!['displayId'], 1);
-      expect(parsed.data!['fps'], 20);
-      expect(parsed.data!['quality'], 80);
-      expect(parsed.data!['grid'], <int>[4, 4]);
-      expect(parsed.data!['inputEnabled'], isTrue);
+    test('encodes remote.start with the fields the protocol lists', () {
+      // D51. These assertions used to read `parsed.data`, which is what the phone was
+      // sending - and it is neither what the protocol specifies nor what the server reads.
+      // WsClientFrame has no field for a nested blob on remote.start; it declares
+      // displayId, fps, quality, grid and inputEnabled at the top level. So the test agreed
+      // with the bug rather than catching it.
+      //
+      // The encoded JSON is checked directly: `parse` is our own model, and a model that
+      // mirrored the mistake would satisfy the same assertion twice over.
+      final raw = EsiWsFrame.remoteStart(
+        id: 'r1',
+        displayId: 1,
+        fps: 20,
+        quality: 80,
+      ).encode();
+
+      final asMap = jsonDecode(raw) as Map<String, dynamic>;
+      expect(asMap['t'], 'remote.start');
+      expect(asMap['displayId'], 1);
+      expect(asMap['fps'], 20);
+      expect(asMap['quality'], 80);
+      expect(asMap['grid'], <int>[4, 4]);
+      expect(asMap['inputEnabled'], isTrue);
+      expect(asMap['data'], isNull,
+          reason: 'these belong at the top level; nesting them under data is D51');
     });
 
     test('encodes a key event with a boolean down flag', () {
-      final parsed = EsiWsFrame.parse(
-        EsiWsFrame.remoteKey(id: 'r4', code: 'KeyA', down: false, mods: <String>['ctrl']).encode(),
-      );
-      expect(parsed.type, 'remote.key');
-      expect(parsed.data!['code'], 'KeyA');
-      expect(parsed.data!['down'], isFalse);
-      expect(parsed.data!['mods'], <String>['ctrl']);
+      final raw = EsiWsFrame.remoteKey(
+        id: 'r4',
+        code: 'KeyA',
+        down: false,
+        mods: <String>['ctrl'],
+      ).encode();
+
+      final asMap = jsonDecode(raw) as Map<String, dynamic>;
+      expect(asMap['t'], 'remote.key');
+      expect(asMap['code'], 'KeyA');
+      expect(asMap['down'], isFalse);
+      expect(asMap['mods'], <String>['ctrl']);
+      expect(asMap['data'], isNull,
+          reason: 'the server reads a top-level `code`; nested, every key press arrived as '
+              'null and was dropped (D51)');
+    });
+
+    test('remote.input carries its payload under "input"', () {
+      // The server declares exactly one field for this and it is not `data`, so a click
+      // built as `data` arrived as a request with no payload at all.
+      final raw = EsiWsFrame.remoteInput('r3', <String, dynamic>{
+        'kind': 'mouseButton',
+        'button': 'left',
+        'down': true,
+      }).encode();
+
+      final asMap = jsonDecode(raw) as Map<String, dynamic>;
+      expect(asMap['t'], 'remote.input');
+      expect((asMap['input']! as Map)['kind'], 'mouseButton');
+      expect(asMap['data'], isNull);
     });
   });
 
-  group('screen frames', () {
+    group('screen frames', () {
     test('parses the 32-byte header', () {
       // Built by hand from the field table in §7.5 rather than captured, so the offsets
       // themselves are asserted.

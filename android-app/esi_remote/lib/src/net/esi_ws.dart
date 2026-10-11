@@ -403,6 +403,11 @@ class EsiWsFrame {
     this.data,
     this.code,
     this.message,
+    this.text,
+    this.down,
+    this.mods,
+    this.input,
+    this.remote,
   });
 
   factory EsiWsFrame.parse(String raw) {
@@ -419,6 +424,17 @@ class EsiWsFrame {
             : (map['data'] == null ? null : <String, dynamic>{'value': map['data']}),
         code: map['code']?.toString(),
         message: map['message']?.toString(),
+        text: map['text']?.toString(),
+        down: map['down'] is bool ? map['down']! as bool : null,
+        mods: map['mods'] is List
+            ? (map['mods']! as List).map((e) => e.toString()).toList()
+            : null,
+        remote: map['remote'] is Map
+            ? (map['remote']! as Map).cast<String, dynamic>()
+            : null,
+        input: map['input'] is Map
+            ? (map['input']! as Map).cast<String, dynamic>()
+            : null,
       );
     } on FormatException {
       return const EsiWsFrame(p: EsiProtocol.version, type: '');
@@ -432,10 +448,32 @@ class EsiWsFrame {
   final String? code;
   final String? message;
 
+  /// D51: these four were never modelled, so the only way to send a key was to smuggle the
+  /// fields inside `data` - where the server does not look for them. PROTOCOL.md §7.2 puts
+  /// them at the top level, and WsClientFrame reads them from there.
+  final String? text;
+  final bool? down;
+  final List<String>? mods;
+  final Map<String, dynamic>? input;
+
+  /// D51: `remote.start` carries its parameters at the top level, not in one blob.
+  final Map<String, dynamic>? remote;
+
   String encode() => jsonEncode(<String, dynamic>{
         'p': p,
         't': type,
         if (id != null) 'id': id,
+        // D51: this dropped everything except p/t/id/data. That is why `code` was always
+        // null on the server no matter what the phone put in it - the field was serialised
+        // into a `data` map and the encoder, which never looked at that map for key fields,
+        // was the only place it survived. PROTOCOL.md §7.2 puts all of these at the top
+        // level, and WsClientFrame reads them from there.
+        if (code != null) 'code': code,
+        'text': ?text,
+        'down': ?down,
+        'mods': ?mods,
+        if (input != null) 'input': input,
+        ...?remote,
         if (data != null) 'data': data,
       });
 
@@ -475,8 +513,10 @@ class EsiWsFrame {
         data: <String, dynamic>{'intervalMs': intervalMs},
       );
 
+  /// D51: `input`, not `data`. PROTOCOL.md §7.2 puts the payload under `input`, and
+  /// WsClientFrame's only field for it is `[JsonPropertyName("input")]`.
   static EsiWsFrame remoteInput(String id, Map<String, dynamic> input) =>
-      EsiWsFrame(p: EsiProtocol.version, type: 'remote.input', id: id, data: input);
+      EsiWsFrame(p: EsiProtocol.version, type: 'remote.input', id: id, input: input);
 
   static EsiWsFrame remoteKey({
     required String id,
@@ -502,11 +542,15 @@ class EsiWsFrame {
     List<int> grid,
     bool inputEnabled,
   ) =>
+      // D51: same defect, and it is why the Stream settings had no effect either - every
+      // slider was serialised into `data` while WsClientFrame reads these from the top level
+      // (PROTOCOL.md §7.2 shows remote.start with displayId/fps/quality/grid/inputEnabled
+      // beside the frame type). The agent fell back to its own defaults every time.
       EsiWsFrame(
         p: p,
         type: type,
         id: id,
-        data: <String, dynamic>{
+        remote: <String, dynamic>{
           'displayId': displayId,
           'fps': fps,
           'quality': quality,
@@ -521,16 +565,19 @@ class EsiWsFrame {
     List<String> mods,
     String? text,
   ) =>
+      // D51: these were inside `data`, so the server read a top-level `code` and found null.
+      // PROTOCOL.md 7.2 puts code/text/down/mods at the top level, and WsClientFrame declares
+      // them with JsonPropertyName("code") and so on - it has no field for a nested object at
+      // all. Every key press was therefore delivered as "no virtual-key mapping for code
+      // (null)" and silently dropped, which is why typing and the on-screen pad did nothing.
       EsiWsFrame(
         p: p,
         type: type,
         id: id,
-        data: <String, dynamic>{
-          'code': code,
-          'down': down,
-          'mods': mods,
-          'text': ?text,
-        },
+        code: code,
+        down: down,
+        mods: mods,
+        text: text,
       );
 }
 
