@@ -104,6 +104,7 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
                     status: status,
                     streaming: _surface.hasContent,
                     live: live,
+                    inputEnabled: _inputEnabled,
                     onStart: _start,
                     onStop: _stop,
                     onReconnect: _reconnect,
@@ -386,6 +387,7 @@ class _StreamPanel extends ConsumerWidget {
     required this.status,
     required this.streaming,
     required this.live,
+    required this.inputEnabled,
     required this.onStart,
     required this.onStop,
     required this.onReconnect,
@@ -395,6 +397,7 @@ class _StreamPanel extends ConsumerWidget {
   final RemoteSessionStatus status;
   final bool streaming;
   final bool live;
+  final bool inputEnabled;
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onReconnect;
@@ -424,7 +427,10 @@ class _StreamPanel extends ConsumerWidget {
         children: <Widget>[
           _InputSurface(
             surface: surface,
-            enabled: streaming,
+            // D50: this was `streaming`, so the 'Send input back' switch changed
+            // nothing - the switch set a flag the agent does not read and the surface
+            // forwarded every touch regardless. Both ends claimed the control worked.
+            enabled: streaming && inputEnabled,
             onTapAt: (x, y) => actions.move(x, y),
             onButton: (button, down, x, y) => actions.button(button, down, x, y),
           ),
@@ -510,6 +516,19 @@ class _InputSurface extends StatefulWidget {
 
 class _InputSurfaceState extends State<_InputSurface> {
   Offset? _lastPosition;
+  int _lastMoveAtMicros = 0;
+
+  /// How far the pointer must travel before the move is forwarded.
+  ///
+  /// In logical pixels. Below roughly this much the movement is a finger resting on glass, not
+  /// someone aiming, and forwarding it drags the remote cursor for no reason.
+  static const double _minMovePixels = 2.0;
+
+  /// The shortest gap between two forwarded moves.
+  ///
+  /// About a hundred and twenty movements a second is already more than a display refresh and
+  /// more than a remote pointer can use. Beyond that the extra frames are latency, not detail.
+  static const int _moveIntervalMicros = 8000;
 
   @override
   Widget build(BuildContext context) => AspectRatio(
@@ -529,15 +548,40 @@ class _InputSurfaceState extends State<_InputSurface> {
           onPanStart: widget.enabled
               ? (details) {
                   _lastPosition = details.localPosition;
+                  // The press itself has to travel, or the first drag after a pause is
+                  // swallowed by the time floor and the pointer appears to lag behind.
+                  _lastMoveAtMicros = 0;
                   final normalised = _normalise(details.localPosition, context);
                   widget.onButton('left', true, normalised.dx, normalised.dy);
                 }
               : null,
           onPanUpdate: widget.enabled
               ? (details) {
-                  final normalised = _normalise(details.localPosition, context);
-                  widget.onTapAt(normalised.dx, normalised.dy);
+                  // D50: a drag used to forward one move per pointer event, with no floor
+                  // on how far the pointer had actually travelled. The agent log showed eight
+                  // moves inside a single millisecond and thirty-six inside four seconds, so
+                  // a single flick of a thumb put the remote pointer through a dozen positions
+                  // in one frame - which is what the cursor jumping actually looked like.
+                  //
+                  // Both halves matter. The distance floor stops a resting finger from
+                  // drifting the pointer across the desktop, and the time floor stops a fast
+                  // drag from becoming a burst the PC cannot paint smoothly. Neither alone is
+                  // enough: a slow wandering finger and a fast flick fail in opposite ways.
+                  final travelled = _lastPosition == null
+                      ? 0.0
+                      : (details.localPosition - _lastPosition!).distance;
+
+                  final now = DateTime.now().microsecondsSinceEpoch;
+                  final farEnough = travelled >= _minMovePixels;
+                  final soonEnough = now - _lastMoveAtMicros >= _moveIntervalMicros;
+
                   _lastPosition = details.localPosition;
+
+                  if (farEnough && soonEnough) {
+                    _lastMoveAtMicros = now;
+                    final normalised = _normalise(details.localPosition, context);
+                    widget.onTapAt(normalised.dx, normalised.dy);
+                  }
                 }
               : null,
           onPanEnd: widget.enabled
