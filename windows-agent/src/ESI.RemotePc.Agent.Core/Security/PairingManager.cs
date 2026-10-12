@@ -84,6 +84,24 @@ public sealed class PairingManager(
     /// </summary>
     public int Port { get; set; } = ProtocolConstants.DefaultHttpsPort;
 
+    /// <summary>
+    /// This machine's SPKI pin, handed to the pairing prompt so the user can read it off the
+    /// screen and type it into the phone.
+    /// <para>
+    /// D53: the phone says "type the full pin from the PC's pairing screen", and the pairing
+    /// screen did not have it. The only copy was a line in the agent log at startup - a file
+    /// nobody opens while holding a phone that is asking them for this value.
+    /// </para>
+    /// <para>
+    /// Set alongside <see cref="Port"/> because both describe how this agent is reachable, and
+    /// both are known only by whoever composed it. It is a public key hash: displaying it does
+    /// not help anyone already looking at this screen, and what it protects is the comparison -
+    /// the value a user types must be one they read here, not one the machine offering the
+    /// pairing supplied.
+    /// </para>
+    /// </summary>
+    public string? SpkiPin { get; set; }
+
     public int PendingCount()
     {
         using var connection = database.Open();
@@ -255,7 +273,10 @@ public sealed class PairingManager(
                 remoteAddress ?? "local",
                 attempt.UserCode,
                 window,
-                pollingUrl));
+                pollingUrl,
+                // D53: so the prompt can show the user the value the phone is about to ask
+                // them to type. Without it the only copy lived in the agent log at startup.
+                SpkiPin));
         }
         else
         {

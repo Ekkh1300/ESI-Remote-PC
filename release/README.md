@@ -10,7 +10,7 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  6B80D68C98150A99B0B2650A6452BED9A8257F599E334A43F1EF4EBCB2D1B297
+ESI-RemotePC-Setup-1.0.1-x64.exe  65633B436B46CBCD299B4FD7CF81ECBF36A2498B1BC1533E177D95BCF1703F2C
 ESI-RemotePC-1.0.1.apk             3EBBDB5DC9AF1F1F6B68365EE3B8D267F7892BFD5A86BCB99902649B480B11CC
 ```
 
@@ -914,3 +914,23 @@ to make on purpose rather than while chasing an install error.
 **Verified with `aapt2` on the shipped file**, not on the build tree: three ABIs advertised,
 signed with v2 and v3, certificate unchanged at
 `CN=ESI Remote PC, SHA-256 de2e20eb...56f68`.
+
+## D53: the pin the phone asks for was not on the screen it told you to read it from
+
+The phone says, in full: *"Type the full pin from the PC's pairing screen, or scan its QR code."*
+The pairing screen showed a six-digit approval code and a QR. It did not show the pin.
+
+The only copy anywhere was a line in the agent log at startup, labelled `spki pin`, in
+`C:\ProgramData\ESI-RemotePC\logs\agent-*.log`. So the path was: notice the field is empty, open
+a text editor, find a log directory, find today's file, search for a string. Every step is a
+place to stop and none of them explains itself.
+
+The pin is now on the pairing prompt, where someone has already decided to trust the machine.
+What the pin protects is that the value typed is one the user read rather than one the offering
+machine supplied, and that comparison only means something when both values are in front of them
+at the same time.
+
+It travels service to session agent as part of the prompt command, resolved from the same
+`CertificateAuthority` that logs it. When it is absent the prompt says where to look rather than
+showing a blank gap.
+

@@ -211,6 +211,25 @@ if (-not $SkipPublish) {
     Write-Host "  publish directory: $publishDir"
     Write-Host '  To build the installer:  iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss'
     Write-Host ''
+
+    # The APK is the one artefact a stranger cannot fix for themselves: if it will not install,
+    # nothing else about this project matters to them. So when one is present it is checked
+    # before the build reports success.
+    #
+    # D52 removed the whole armeabi-v7a ABI, which left every 32-bit phone unable to install
+    # the package, and the reason that shipped is that `flutter analyze` and `flutter test`
+    # were both green. Neither of them opens a package. This does.
+    $apk = Join-Path $root '..\android-app\esi_remote\build\app\outputs\flutter-apk\app-release.apk'
+    if (Test-Path $apk) {
+        Write-Host 'Android package' -ForegroundColor Cyan
+        $checker = Join-Path $root 'tools\install-check\esi-install-check.csproj'
+        & $dotnetExe run --project $checker -- $apk --nologo
+        if ($LASTEXITCODE -ne 0) {
+            throw ("The APK at $apk will not install everywhere. See the failures above; " +
+                   "shipping it means a phone in someone's hand cannot install it at all.")
+        }
+        Write-Host ''
+    }
 }
 
 if ($WithInstallCycle) {

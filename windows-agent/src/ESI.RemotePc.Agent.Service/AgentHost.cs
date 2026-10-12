@@ -206,6 +206,13 @@ public static class AgentHost
             // Read at resolution time, after Kestrel has been configured. A QR carrying the
             // wrong port is a pairing that never connects, with no error reported anywhere.
             Port = provider.GetRequiredService<KestrelTuning>().Port,
+
+            // D53: the pairing prompt shows this so a user holding the phone can read the pin
+            // off the screen. Resolved here for the same reason as the port - the certificate
+            // authority owns it, and it is what this agent is actually reachable as. A pairing
+            // prompt that cannot show the pin leaves the phone asking for a value the screen
+            // does not have, which is where the only copy of it ended up: the log file.
+            SpkiPin = provider.GetRequiredService<CertificateAuthority>().SpkiPin,
         });
 
         // ---- Notifications ----

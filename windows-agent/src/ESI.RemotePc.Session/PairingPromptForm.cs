@@ -146,6 +146,34 @@ internal sealed class PairingPromptForm : Form
             ForeColor = Color.FromArgb(190, 198, 214),
         };
 
+        // D53: the phone asks the user to type "the full pin from the PC's pairing screen",
+        // and until now this screen did not have it. The only copy was a line in the agent
+        // log at startup - a file nobody opens while holding a phone that is asking them
+        // for this value, so the instruction pointed at a screen that could not satisfy it.
+        //
+        // It goes here rather than somewhere else because this is where someone has already
+        // decided to trust this machine. What the pin protects is that the value they type
+        // is one they read themselves rather than one the offering machine handed them, and
+        // that comparison is only meaningful when both values are in front of them.
+        var pinCaption = new Label
+        {
+            Text = "Certificate pin to type into the phone:",
+            AutoSize = false,
+            Bounds = new Rectangle(24, 238, 300, 20),
+            ForeColor = Color.FromArgb(150, 158, 176),
+        };
+
+        var pinValue = new Label
+        {
+            Text = string.IsNullOrWhiteSpace(request.SpkiPin)
+                ? "(not reported - see C:\\ProgramData\\ESI-RemotePC\\logs)"
+                : request.SpkiPin,
+            Font = new Font("Consolas", 9F),
+            AutoSize = false,
+            Bounds = new Rectangle(24, 256, 300, 38),
+            ForeColor = Color.FromArgb(198, 210, 228),
+        };
+
         _codeLabel = new Label
         {
             Text = FormatCode(request.UserCode),
@@ -208,9 +236,9 @@ internal sealed class PairingPromptForm : Form
         _deny.Click += (_, _) => Decide(PairingDecision.Denied);
 
         if (qr is not null)
-            Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, qr, _deny, _approve]);
+            Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, pinCaption, pinValue, qr, _deny, _approve]);
         else
-            Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, _deny, _approve]);
+            Controls.AddRange([heading, device, codeCaption, _codeLabel, _countdownLabel, _hint, pinCaption, pinValue, _deny, _approve]);
 
         // Deny is the default, so a stray Enter - or a phone-triggered "approve" the user did
         // not read - cannot grant access.

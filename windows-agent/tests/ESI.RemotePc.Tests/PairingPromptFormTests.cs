@@ -24,6 +24,14 @@ namespace Esi.Tests;
 /// </remarks>
 public sealed class PairingPromptFormTests
 {
+
+    /// <summary>
+    /// D53: the value the prompt exists to put in front of the person deciding to trust this
+    /// machine, so the tests that check the form's geometry check it with a real one rather than
+    /// with null - otherwise every layout test would pass against a form showing
+    /// "(not reported)".
+    /// </summary>
+    private const string SpkiPin = "f9Rl9PkFy20h7EmRGjInZguDr0eBYIEqSaO1yODVzDE=";
     private static PairingPromptRequest Request(string? pollingUrl) => new(
         PairingId: "0123456789abcdef",
         DeviceName: "Android phone",
@@ -33,7 +41,8 @@ public sealed class PairingPromptFormTests
         RemoteAddress: "192.168.1.102",
         UserCode: "473374",
         ExpiresInSeconds: 120,
-        PollingUrl: pollingUrl);
+        PollingUrl: pollingUrl,
+        SpkiPin: SpkiPin);
 
     /// <summary>A polling URL of the shape the agent builds, for the form that draws a QR.</summary>
     private static string PollingUrl() =>

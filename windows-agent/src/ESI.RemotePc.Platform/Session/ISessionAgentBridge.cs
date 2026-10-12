@@ -154,7 +154,22 @@ public sealed record PairingPromptRequest(
     /// which still needs the user to hand the secret over by scanning.
     /// </para>
     /// </summary>
-    string? PollingUrl);
+    string? PollingUrl,
+    /// <summary>
+    /// This machine's SPKI pin, for the prompt to display.
+    /// <para>
+    /// D53: the phone asks the user to type the pin "from the PC's pairing screen", and the
+    /// pairing screen did not show it. The only copy was a line in the agent log at startup,
+    /// which is not something anyone opens while holding a phone. This is where the person
+    /// deciding to trust the machine is already standing, so it goes here.
+    /// </para>
+    /// <para>
+    /// It is a public key hash. Showing it tells a user nothing an attacker who can see the
+    /// screen could not also see - what matters is that they compare it against the value on
+    /// the phone rather than type one the phone supplied.
+    /// </para>
+    /// </summary>
+    string? SpkiPin);
 
 /// <summary>How the person on the desktop answered a pairing prompt.</summary>
 public enum PairingOutcome
