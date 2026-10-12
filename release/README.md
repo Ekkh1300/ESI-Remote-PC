@@ -10,8 +10,8 @@ Two files. That is the whole delivery.
 SHA-256, first 32 hex characters:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  FCEEE89E9AD769C9D7C4FC2FA95AF81BD3893034BCA1A93B9F54D65C2CCF70FD
-ESI-RemotePC-1.0.1.apk             A408ECC1DD73C0B613FCB0C7D82D4D6B3274432790C9E05C14152EA4D143B417
+ESI-RemotePC-Setup-1.0.1-x64.exe  6B80D68C98150A99B0B2650A6452BED9A8257F599E334A43F1EF4EBCB2D1B297
+ESI-RemotePC-1.0.1.apk             3EBBDB5DC9AF1F1F6B68365EE3B8D267F7892BFD5A86BCB99902649B480B11CC
 ```
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
@@ -866,3 +866,51 @@ at the top level, and `EsiWsFrame` models the four fields it had no place for.
 `parsed.data['displayId']` and `parsed.data['code']` - checking our own model against itself
 rather than the encoded bytes. It was written to prove the frame shape and it proved the wrong
 shape. Both now decode the JSON directly and assert on the wire.
+
+## D52: the APK would not install on 32-bit phones
+
+`app not installed as package appears to be invalid` is what an Android installer says when
+nothing in the package matches the device. The usual cause is an ABI list with nothing the phone
+can run.
+
+This one had exactly that. `build.gradle.kts` excluded the whole of `armeabi-v7a`, so the shipped
+package advertised:
+
+```
+native-code: 'arm64-v8a' 'x86_64'          <- before
+native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'   <- after
+```
+
+Any 32-bit ARM phone was refused, and it has no way to know that - it is told the package is
+invalid.
+
+**The exclusion was not arbitrary.** It existed because ML Kit's barcode scanner ships
+`libbarhopper_v3.so` for armeabi-v7a while Flutter's own libraries for that ABI were being
+stripped, which produced a half-present ABI: the package installed and then died on launch with
+an `UnsatisfiedLinkError`. That is a real failure, and it was fixed one layer too broad. Only that
+single library is the problem - Flutter's armeabi-v7a output is complete - so only that single
+library is excluded now and the ABI stays:
+
+```kotlin
+excludes += setOf("**/armeabi-v7a/libbarhopper_v3.so")
+```
+
+The APK went from 53.6 MB to 70.0 MB. That is the 32-bit build being present, which is what it
+costs and what makes those phones able to install it.
+
+**A second candidate was investigated and dismissed.** The release was signed with v2 only, and
+v1 - JAR signing, the scheme Android accepts below API 24 - looked like a plausible second cause
+of the same error message. It is not. This package declares `minSdkVersion 24`, so no device old
+enough to need v1 can install it anyway; the floor is set by `EncryptedSharedPreferences` and
+the TLS stack that SPKI pinning depends on. Enabling v1 would add megabytes of signature files
+for a range that cannot run the app. The omission is now written down as a decision rather than
+left as an accident, because an accidental v2-only release and a deliberate one produce
+identical bytes.
+
+`minSdk 24` (Android 7.0) is unchanged and deliberately so. Lowering it to reach older phones
+would mean weakening the storage encryption the pairing secrets depend on, which is a decision
+to make on purpose rather than while chasing an install error.
+
+**Verified with `aapt2` on the shipped file**, not on the build tree: three ABIs advertised,
+signed with v2 and v3, certificate unchanged at
+`CN=ESI Remote PC, SHA-256 de2e20eb...56f68`.
