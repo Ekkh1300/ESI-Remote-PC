@@ -69,6 +69,20 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
     private DateTime _lastHeartbeatUtc = DateTime.MinValue;
     private long _inputSequence;
 
+    /// <summary>
+    /// Media questions the service is waiting on, keyed by the correlation id they were asked
+    /// with. Removed in a finally on the caller's side, so a timeout cannot leak an entry that
+    /// would later resolve a question nobody is asking any more.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<MediaStateFromAgent?>> _pendingMediaQueries = new();
+
+    /// <summary>
+    /// The freshest media state the agent has reported, however it arrived - as an answer to a
+    /// question or as the tail of a volume command. Used as a fallback when a question times
+    /// out, so a slow agent degrades to "slightly stale" rather than to "0".
+    /// </summary>
+    private volatile MediaStateFromAgent? _lastMediaState;
+
     // Events raised when the session agent reports something interesting.
     public event EventHandler<SessionAgentEvent>? EventReported;
 
@@ -391,6 +405,23 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
 
             case SessionChannelProtocol.Events.CommandResult:
             case SessionChannelProtocol.Events.LaunchResult:
+                // A media reply carries the PC's real volume and mute state. The agent is the
+                // only process that can read them - the service is in session 0 with no audio
+                // endpoint - so this is where they cross the pipe (D43).
+                var reportedMedia = ReadMediaState(m);
+                if (reportedMedia is not null)
+                    _lastMediaState = reportedMedia;
+
+                if (m.CorrelationId is { } correlation && _pendingMediaQueries.TryRemove(correlation, out var waiter))
+                {
+                    // A failed command answers the question too: the answer is "I do not know",
+                    // and the caller says so rather than reporting a silent PC.
+                    if (m.Succeeded ?? m.Ok ?? false)
+                        waiter.TrySetResult(reportedMedia);
+                    else
+                        waiter.TrySetResult(null);
+                }
+
                 CommandCompleted?.Invoke(this, new SessionAgentCommandResult
                 {
                     Command = m.T,
@@ -516,6 +547,28 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
             GridRows = gridRows,
         });
 
+    /// <summary>
+    /// Asks the session agent to open the output device for loopback capture.
+    /// </summary>
+    /// <remarks>
+    /// Returns whether the request was delivered, not whether audio is flowing. The device
+    /// opens asynchronously and can refuse several hundred milliseconds later, so the truth
+    /// only exists in the session agent's log and on the phone's meter.
+    /// </remarks>
+    public bool RequestAudio(string deviceId)
+        => Send(new SessionCommandEnvelope
+        {
+            T = SessionChannelProtocol.Commands.AudioStart,
+            DeviceId = deviceId,
+        });
+
+    public bool StopAudio(string deviceId)
+        => Send(new SessionCommandEnvelope
+        {
+            T = SessionChannelProtocol.Commands.AudioStop,
+            DeviceId = deviceId,
+        });
+
     public bool StopCapture(string deviceId)
         => Send(new SessionCommandEnvelope
         {
@@ -551,6 +604,84 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
             Repeats = target,
             Action = action,
         });
+
+    /// <summary>
+    /// Asks the session agent what the PC's volume actually is.
+    /// <para>
+    /// A question, not a command, because the answer is the whole point: the service runs in
+    /// session 0 with no audio endpoint, so it cannot read any of this itself. Every poll it
+    /// answered from its own controller came back 0, and the phone displayed that 0 beside a
+    /// slider the user had just moved - both looking equally certain, neither saying which one
+    /// was real.
+    /// </para>
+    /// <para>
+    /// A local named-pipe round trip, so the timeout is a guard rather than a budget. On timeout
+    /// the last thing the agent said is returned if there is one; if there is not, the caller is
+    /// told the volume is unknown, which is the truth.
+    /// </para>
+    /// </summary>
+    public async Task<MediaStateFromAgent?> QueryMediaStateAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        // Not connected means nothing can answer, and the last thing the agent said is from
+        // before it went away - returning it would keep a dead PC's volume on the phone's
+        // screen indefinitely. Null hands the caller back to its own (honest, unknown) read.
+        if (!_connected)
+            return null;
+
+        var correlation = Guid.NewGuid().ToString("N");
+        var waiter = new TaskCompletionSource<MediaStateFromAgent?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _pendingMediaQueries[correlation] = waiter;
+
+        try
+        {
+            if (!Send(new SessionCommandEnvelope
+            {
+                T = SessionChannelProtocol.Commands.MediaStateQuery,
+                CorrelationId = correlation,
+            }))
+            {
+                return _lastMediaState;
+            }
+
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(timeout);
+
+            var raced = await Task.WhenAny(
+                waiter.Task,
+                Task.Delay(Timeout.InfiniteTimeSpan, deadline.Token)).ConfigureAwait(false);
+
+            if (raced != waiter.Task)
+                return _lastMediaState;
+
+            return await waiter.Task.ConfigureAwait(false) ?? _lastMediaState;
+        }
+        finally
+        {
+            _pendingMediaQueries.TryRemove(correlation, out _);
+        }
+    }
+
+    /// <summary>
+    /// Pulls the media state out of a reply, or null if the reply did not carry one.
+    /// <para>
+    /// Gated on the *Known flags rather than on the values, because the values are always
+    /// present: a reply that read nothing looks exactly like a reply that read a silent, unmuted
+    /// PC, and mistaking one for the other is the whole bug this replaced.
+    /// </para>
+    /// </summary>
+    internal static MediaStateFromAgent? ReadMediaState(SessionAgentMessage m)
+        => m.VolumeKnown is true or false || m.IsMuteKnown is true or false
+            ? new MediaStateFromAgent(
+                  Math.Clamp(m.Volume ?? 0, 0, 100),
+                  m.VolumeKnown ?? false,
+                  m.IsMuted ?? false,
+                  m.IsMuteKnown ?? false,
+                  m.DefaultDevice)
+            : null;
 
     /// <summary>
     /// Asks the session agent to inject a transport key. From session 0 the same call reports

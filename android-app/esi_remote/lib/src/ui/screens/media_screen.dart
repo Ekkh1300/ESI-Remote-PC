@@ -10,6 +10,7 @@ import '../format.dart';
 import '../shell.dart';
 import '../theme.dart';
 import '../widgets/panel.dart';
+import '../widgets/setting_slider.dart';
 import '../widgets/states.dart';
 
 /// Media control, and the rest of the "small controls" tab.
@@ -28,23 +29,22 @@ class MediaScreen extends ConsumerWidget {
             return const FeatureUnavailable(feature: 'media', label: 'Media control');
           }
           final slice = ref.watch(mediaProvider);
-          final state = slice.value;
 
           return OfflineGuard(
             connection: connection,
             child: EsiPage(
               title: 'Control',
-              subtitle: state?.defaultDevice ?? 'The default audio output on the PC',
+              subtitle: slice.value?.defaultDevice ?? 'The default audio output on the PC',
               onRefresh: () => ref.read(mediaProvider.notifier).refresh(),
               children: <Widget>[
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: EsiSpace.lg),
-                  child: _VolumePanel(state: state),
+                  child: _VolumePanel(slice: slice),
                 ),
                 const SizedBox(height: EsiSpace.md),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: EsiSpace.lg),
-                  child: _TransportPanel(state: state),
+                  child: _TransportPanel(slice: slice),
                 ),
                 const SizedBox(height: EsiSpace.md),
                 Padding(
@@ -59,12 +59,13 @@ class MediaScreen extends ConsumerWidget {
 }
 
 class _VolumePanel extends ConsumerWidget {
-  const _VolumePanel({required this.state});
+  const _VolumePanel({required this.slice});
 
-  final MediaState? state;
+  final AsyncSlice<MediaState> slice;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final state = slice.value;
     final notifier = ref.read(mediaProvider.notifier);
     final muted = state?.isMuted ?? false;
     final volume = state?.volume ?? 0;
@@ -75,12 +76,22 @@ class _VolumePanel extends ConsumerWidget {
       trailing: state == null
           ? null
           : EsiTag(
-              label: 'peak ${state!.sessionPeak}',
+              label: 'peak ${state.sessionPeak}',
               colour: EsiPalette.dim,
               tooltip: 'The loudest level this output device has produced',
             ),
+      // D54: a failed load used to show this spinner for ever. `state == null` is true both
+      // while loading and after a failure, and only the first of those is worth waiting for -
+      // the second one is a machine that cannot be reached, and a control that says so is more
+      // use than one that quietly turns.
       child: state == null
-          ? const EsiLoading(height: 90)
+          ? (slice.error != null
+              ? _LoadFailure(
+                  message: slice.error!,
+                  detail: slice.errorDetail,
+                  onRetry: () => ref.read(mediaProvider.notifier).refresh(),
+                )
+              : const EsiLoading(height: 90))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
@@ -90,51 +101,77 @@ class _VolumePanel extends ConsumerWidget {
                     EsiIconAction(
                       icon: muted ? Icons.volume_off : Icons.volume_down,
                       tooltip: 'Volume down',
-                      onPressed: state!.can('volumeDown')
+                      onPressed: state.can('volumeDown')
                           ? () => notifier.act('volumeDown', step: 5)
                           : null,
                     ),
                     Expanded(
-                      child: Slider(
-                        value: volume.clamp(0, 100).toDouble(),
+                      // EsiSettingSlider, not a bare Slider. A bare one sends a request per
+                      // division of travel and is bound to the server's copy of the value, so
+                      // the thumb springs back between replies and a single swipe lands on
+                      // whichever of its hundred replies arrived last.
+                      //
+                      // Disabled outright when the PC's level could not be read. A slider that
+                      // moves and then snaps back to a number nobody measured is worse than one
+                      // that says it cannot be used.
+                      child: EsiSettingSlider(
+                        value: volume.toDouble(),
+                        min: 0,
                         max: 100,
                         divisions: 100,
-                        label: '$volume',
-                        onChanged: state!.can('volumeSet')
-                            ? (value) => notifier.act('volumeSet', volume: value.round())
-                            : null,
+                        enabled: state.canSetVolume,
+                        onPreview: (value) =>
+                            notifier.setVolume(value.round()),
+                        onCommit: (value) async {
+                          final outcome =
+                              await notifier.setVolume(value.round(), wait: true);
+                          if (outcome.ok) return;
+                          if (context.mounted) showOutcome(context, outcome);
+                        },
                       ),
                     ),
                     EsiIconAction(
                       icon: Icons.volume_up,
                       tooltip: 'Volume up',
-                      onPressed: state!.can('volumeUp')
+                      onPressed: state.can('volumeUp')
                           ? () => notifier.act('volumeUp', step: 5)
                           : null,
                     ),
                     const SizedBox(width: EsiSpace.sm),
                     SizedBox(
                       width: 52,
+                      // A dash, not a zero. The PC could not be asked what its volume is, and 0
+                      // is also a real volume - showing it as a number is how a phone ended up
+                      // displaying a confident silent next to a slider the user had just moved.
                       child: Text(
-                        '$volume',
+                        state.volumeKnown ? '$volume' : '—',
                         textAlign: TextAlign.right,
                         style: EsiType.reading,
                       ),
                     ),
                   ],
                 ),
+                if (!state.volumeKnown) ...<Widget>[
+                  const SizedBox(height: EsiSpace.sm),
+                  Text(
+                    'The PC could not report its volume, so the level above is unknown. '
+                    'This happens while nobody is signed in to the PC: the volume is read '
+                    'from the signed-in session.',
+                    style: EsiType.body.copyWith(color: EsiPalette.faint, fontSize: 11),
+                  ),
+                ],
                 const SizedBox(height: EsiSpace.md),
                 Row(
                   children: <Widget>[
                     OutlinedButton.icon(
-                      onPressed: state!.can('toggleMute')
+                      onPressed: state.can('toggleMute')
                           ? () => notifier.act('toggleMute')
                           : null,
                       icon: Icon(muted ? Icons.volume_up : Icons.volume_off, size: 16),
                       label: Text(muted ? 'Unmute' : 'Mute'),
                     ),
                     const Spacer(),
-                    if (state!.availableActions.isEmpty)
+                    if (state.availableActions.isEmpty)
                       Text(
                         'The agent did not restrict any action for this device.',
                         style: EsiType.body.copyWith(color: EsiPalette.faint, fontSize: 11),
@@ -147,14 +184,58 @@ class _VolumePanel extends ConsumerWidget {
   }
 }
 
-class _TransportPanel extends ConsumerWidget {
-  const _TransportPanel({required this.state});
+/// Says what went wrong and offers to try again, in place of a spinner that never resolves.
+class _LoadFailure extends StatelessWidget {
+  const _LoadFailure({required this.message, this.detail, required this.onRetry});
 
-  final MediaState? state;
+  final String message;
+  final String? detail;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Icon(Icons.error_outline, size: 17, color: EsiPalette.alarm),
+              const SizedBox(width: EsiSpace.md),
+              Expanded(
+                child: Text(
+                  message,
+                  style: EsiType.bodyStrong.copyWith(color: EsiPalette.alarm, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          if (detail != null) ...<Widget>[
+            const SizedBox(height: EsiSpace.xs),
+            Text(
+              detail!,
+              style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12),
+            ),
+          ],
+          const SizedBox(height: EsiSpace.sm),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Try again'),
+          ),
+        ],
+      );
+}
+
+class _TransportPanel extends ConsumerWidget {
+  const _TransportPanel({required this.slice});
+
+  final AsyncSlice<MediaState> slice;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(mediaProvider.notifier);
+    final state = slice.value;
     return EsiPanel(
       title: 'Playback',
       severity: state == null ? Severity.unknown : Severity.nominal,
@@ -163,7 +244,13 @@ class _TransportPanel extends ConsumerWidget {
       footnote: 'The protocol reports transport state and volume, not what is playing. '
           'Track titles are not available from the agent.',
       child: state == null
-          ? const EsiLoading(height: 90)
+          ? (slice.error != null
+              ? _LoadFailure(
+                  message: slice.error!,
+                  detail: slice.errorDetail,
+                  onRetry: () => ref.read(mediaProvider.notifier).refresh(),
+                )
+              : const EsiLoading(height: 90))
           : Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: <Widget>[
@@ -182,8 +269,8 @@ class _TransportPanel extends ConsumerWidget {
                         colour: action == MediaAction.playPause
                             ? EsiPalette.signal
                             : EsiPalette.dim,
-                        tooltip: state!.can(action.wire) ? action.label : '${action.label} unavailable',
-                        onPressed: state!.can(action.wire)
+                        tooltip: state.can(action.wire) ? action.label : '${action.label} unavailable',
+                        onPressed: state.can(action.wire)
                             ? () => notifier.act(action.wire)
                             : null,
                       ),

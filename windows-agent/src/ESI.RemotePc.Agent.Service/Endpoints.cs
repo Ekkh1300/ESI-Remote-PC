@@ -936,7 +936,9 @@ public static class Endpoints
     {
         var api = Api(endpoints);
 
-        api.MapGet("/media/state", ([FromServices] MediaController media) => Results.Ok(media.GetState()));
+        api.MapGet("/media/state", async (HttpContext context, MediaController media,
+            ISessionAgentBridge session) =>
+            Results.Ok(await MediaStateAsync(session, media, context.RequestAborted).ConfigureAwait(false)));
 
         api.MapPost("/media/{action}", async (HttpContext context, string action, MediaActionRequest? request,
             [FromServices] MediaController media, ISessionAgentBridge session) =>
@@ -983,7 +985,8 @@ public static class Endpoints
                     }, statusCode: StatusCodes.Status409Conflict);
                 }
 
-                var afterTransport = media.GetState();
+                var afterTransport = await MediaStateAsync(session, media, context.RequestAborted)
+                    .ConfigureAwait(false);
                 return Results.Ok(new MediaActionResponse
                 {
                     Accepted = true,
@@ -1037,13 +1040,22 @@ public static class Endpoints
 
                 // Read after the keys land, so the phone shows where the PC actually is rather
                 // than the number it asked for.
-                var after = media.GetState();
+                //
+                // Routed through the session agent, same as the write. The service is in
+                // session 0 with no audio endpoint, so its own read here was always 0 - which
+                // is why the reply said "volume is 0" immediately after accepting an instruction
+                // to move it to 60.
+                //
+                // No race with the walk above: this is a named pipe, so the query is written
+                // after the volume command and the agent processes them in that order.
+                var after = await MediaStateAsync(session, media, context.RequestAborted)
+                    .ConfigureAwait(false);
                 return Results.Ok(new MediaActionResponse
                 {
                     Accepted = true,
                     Action = normalized,
-                    Volume = after.Volume,
-                    IsMuted = after.IsMuted,
+                    Volume = after.VolumeKnown ? after.Volume : null,
+                    IsMuted = after.IsMuteKnown ? after.IsMuted : null,
                 });
             }
 
@@ -1059,6 +1071,50 @@ public static class Endpoints
                 Detail = $"'{normalized}' has no route to the interactive desktop.",
             }, statusCode: StatusCodes.Status409Conflict);
         });
+    }
+
+    /// <summary>
+    /// The PC's media state as the phone should see it.
+    /// <para>
+    /// Always asked of the session agent when one is connected. The service runs in session 0,
+    /// which gets no audio endpoint at all, so every read it made for itself came back unknown -
+    /// and unknown used to be reported as a confident 0, so a PC at 100% read as silent next to a
+    /// slider the user had just moved (D43).
+    /// </para>
+    /// <para>
+    /// A 750 ms guard, not a budget: this is a local named-pipe round trip, and the timeout only
+    /// exists so a wedged agent cannot hold a request open. On timeout the service's own read is
+    /// used, which carries <c>volumeKnown: false</c> rather than a fabricated level.
+    /// </para>
+    /// </summary>
+    private static async Task<MediaStateResponse> MediaStateAsync(
+        ISessionAgentBridge session,
+        MediaController media,
+        CancellationToken cancellationToken)
+    {
+        var fallback = media.GetState();
+
+        if (!session.IsConnected)
+            return fallback;
+
+        var fromAgent = await session
+            .QueryMediaStateAsync(TimeSpan.FromMilliseconds(750), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (fromAgent is null)
+            return fallback;
+
+        return new MediaStateResponse
+        {
+            Volume = fromAgent.Volume,
+            VolumeKnown = fromAgent.VolumeKnown,
+            IsMuted = fromAgent.IsMuted,
+            IsMuteKnown = fromAgent.IsMuteKnown,
+            DefaultDevice = fromAgent.DefaultDevice ?? fallback.DefaultDevice,
+            SessionPeak = fallback.SessionPeak,
+            Supported = true,
+            AvailableActions = fallback.AvailableActions,
+        };
     }
 
     /// <summary>

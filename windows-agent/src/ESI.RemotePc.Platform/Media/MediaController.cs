@@ -31,154 +31,81 @@ public sealed class MediaController(ILogger<MediaController> log)
     private const int DefaultVolumeStep = 5;
     private const uint MaxVolume = 100;
 
-    // ---- Core Audio late-bound COM ------------------------------------------------
+    /// <summary>
+    /// Presses per <c>SendInput</c> call. A ceiling per call, not per command: a walk of a
+    /// hundred presses is simply several calls rather than one truncated one.
+    /// </summary>
+    private const int MaxVolumeStep = 25;
 
-    private static readonly Guid ClsidMMDeviceEnumerator = new("BCDE0395-E52F-467C-8E3D-C4579291692E");
-    private static readonly Guid IidIAudioEndpointVolume = new("5CDF2C82-841E-4546-9722-0CF74078229A");
-
-    private const uint ERender = 0;
-    private const uint DeviceStateActive = 0x1;
-    private const uint CLSCTX_ALL = 0x17;
-
-    private object? _enumerator;
-    private object? _endpointVolume;
-    private string? _deviceName;
-
-    public bool CoreAudioAvailable => _endpointVolume is not null;
-
-    public string? DefaultDeviceName => _deviceName;
+    // ---- Core Audio -----------------------------------------------------------------
 
     /// <summary>
-    /// Resolves the default render endpoint's volume interface. Failure is non-fatal:
-    /// the volume keys still work, only the read-back is unavailable.
+    /// The default render endpoint this controller reads from, or null where there is none.
+    /// <para>
+    /// Null inside a Windows service, always: it runs in session 0, which has no interactive
+    /// desktop and gets no endpoint from Core Audio at all (D43). Every read is then "unknown",
+    /// and unknown is the honest answer. The previous version reported it as a confident 0,
+    /// which made a PC sitting at 100% read as silent - and made "move to 30" a walk of 30
+    /// volume-up presses from a base that had never been measured, so the volume never arrived
+    /// anywhere near the number the phone had asked for.
+    /// </para>
+    /// </summary>
+    private CoreAudioEndpoint? _endpoint;
+
+    private bool _connectFailed;
+
+    public bool CoreAudioAvailable => _endpoint is not null;
+
+    public string? DefaultDeviceName => _endpoint?.FriendlyName;
+
+    /// <summary>
+    /// Opens the default render endpoint. Failure is non-fatal: the volume keys still work,
+    /// only the read-back is unavailable - and unavailable is reported as unavailable.
     /// </summary>
     public bool TryConnect()
     {
-        if (_endpointVolume is not null)
+        if (_endpoint is not null)
             return true;
 
-        try
+        // Cached rather than retried. Inside a service this fails forever and identically, so
+        // retrying it on every poll is a warning line in the log every three seconds for a
+        // fact that does not change.
+        if (_connectFailed)
+            return false;
+
+        _endpoint = CoreAudioEndpoint.TryOpen();
+
+        if (_endpoint is null)
         {
-            var type = Type.GetTypeFromCLSID(ClsidMMDeviceEnumerator, throwOnError: true);
-            _enumerator = Activator.CreateInstance(type!);
-            if (_enumerator is null)
-                return false;
-
-            // IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender, eConsole, &device)
-            var getDefault = _enumerator.GetType().GetMethod("GetDefaultAudioEndpoint");
-            if (getDefault is null)
-                return false;
-
-            object? device = null;
-            var args = new[] { (object)ERender, (object)0u, null };
-            var result = getDefault.Invoke(_enumerator, args);
-            device = args[2];
-
-            if (result is not null && (int)result != 0)
-                return false;
-            if (device is null)
-                return false;
-
-            // IMMDevice::Activate(IID_IAudioEndpointVolume)
-            var activate = device.GetType().GetMethod("Activate");
-            if (activate is null)
-                return false;
-
-            object? volume = null;
-            var activateArgs = new[] { (object)IidIAudioEndpointVolume, (object)CLSCTX_ALL, IntPtr.Zero, (object)0u, null };
-            var activateResult = activate.Invoke(device, activateArgs);
-            volume = activateArgs[4];
-
-            if (activateResult is not null && (int)activateResult != 0)
-                return false;
-            if (volume is null)
-                return false;
-
-            _endpointVolume = volume;
-            _deviceName = ReadFriendlyName(device);
-            log.LogInformation("Core Audio endpoint volume connected: {Device}", _deviceName ?? "default render endpoint");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            log.LogDebug(ex, "Core Audio is unavailable; volume read-back will be disabled");
+            _connectFailed = true;
+            log.LogWarning(
+                "Core Audio gave this process no default render endpoint, so the volume cannot " +
+                "be read back. Expected inside the Windows service (session 0); the session " +
+                "agent reads the volume on its behalf.");
             return false;
         }
+
+        log.LogInformation("Core Audio endpoint volume connected: {Device}", _endpoint.FriendlyName);
+        return true;
     }
 
-    private string? ReadFriendlyName(object device)
-    {
-        try
-        {
-            var store = device.GetType().GetMethod("OpenPropertyStore")?.Invoke(device, [0u]);
-            if (store is null)
-                return null;
-
-            // {a45c254e-df1c-4efd-8020-67d146a850e0}0 = PKEY_Device_FriendlyName
-            var getValue = store.GetType().GetMethod("GetValue");
-            var fromId = store.GetType().GetMethod("GetValue")?.GetParameters();
-            if (getValue is null || fromId is null)
-                return null;
-
-            var key = new PropertyKey(0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 0);
-            var value = getValue.Invoke(store, [key]);
-            if (value is null)
-                return null;
-
-            var data = value.GetType().GetProperty("Value")?.GetValue(value);
-            if (data is string s)
-                return s;
-
-            return data?.ToString();
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
+    /// <summary>The master volume, 0-100, or null when it cannot be read.</summary>
     private int? ReadVolume()
     {
-        if (!TryConnect() || _endpointVolume is null)
+        if (!TryConnect() || _endpoint is null)
             return null;
 
-        try
-        {
-            var getMaster = _endpointVolume.GetType().GetMethod("GetMasterVolumeLevelScalar");
-            if (getMaster is null)
-                return null;
-
-            var args = new[] { (object)0f };
-            getMaster.Invoke(_endpointVolume, args);
-            var scalar = Convert.ToSingle(args[0]);
-            return (int)Math.Round(Math.Clamp(scalar, 0f, 1f) * MaxVolume);
-        }
-        catch (Exception ex)
-        {
-            log.LogDebug(ex, "Could not read the master volume level");
-            return null;
-        }
+        var scalar = _endpoint.ReadVolumeScalar();
+        return scalar is null ? null : (int)Math.Round(scalar.Value * MaxVolume);
     }
 
+    /// <summary>Whether the default output is muted, or null when that cannot be read.</summary>
     private bool? ReadMuted()
     {
-        if (!TryConnect() || _endpointVolume is null)
+        if (!TryConnect() || _endpoint is null)
             return null;
 
-        try
-        {
-            var getMute = _endpointVolume.GetType().GetMethod("GetMute");
-            if (getMute is null)
-                return null;
-
-            var args = new[] { (object)0f };
-            getMute.Invoke(_endpointVolume, args);
-            return Convert.ToSingle(args[0]) > 0.5f;
-        }
-        catch
-        {
-            return null;
-        }
+        return _endpoint.ReadMuted();
     }
 
     // ---------------------------------------------------------------------------
@@ -191,16 +118,10 @@ public sealed class MediaController(ILogger<MediaController> log)
     /// screen and any per-app mixer all stay consistent with what the user sees.
     /// </summary>
     public MediaActionResponse VolumeUp(int step)
-    {
-        var repeats = Math.Clamp(step <= 0 ? DefaultVolumeStep : step, 1, 25);
-        return SendVolumeKey(WinConst.VK_VOLUME_UP, repeats, "VolumeUp");
-    }
+        => SendVolumeKey(WinConst.VK_VOLUME_UP, step <= 0 ? DefaultVolumeStep : step, "VolumeUp");
 
     public MediaActionResponse VolumeDown(int step)
-    {
-        var repeats = Math.Clamp(step <= 0 ? DefaultVolumeStep : step, 1, 25);
-        return SendVolumeKey(WinConst.VK_VOLUME_DOWN, repeats, "VolumeDown");
-    }
+        => SendVolumeKey(WinConst.VK_VOLUME_DOWN, step <= 0 ? DefaultVolumeStep : step, "VolumeDown");
 
     /// <summary>
     /// Injects a volume or mute key from the interactive desktop, on behalf of the service.
@@ -220,27 +141,8 @@ public sealed class MediaController(ILogger<MediaController> log)
     /// bug.
     /// </para>
     /// </summary>
-    public static MediaActionResponse SendVolumeKeyFromSession(ushort vk, int repeats, string action)
-    {
-        var clamped = Math.Clamp(repeats <= 0 ? DefaultVolumeStep : repeats, 1, 25);
-        var events = new List<INPUT>(clamped * 2);
-        for (var i = 0; i < clamped; i++)
-        {
-            events.Add(KeyEvent(vk, down: true));
-            events.Add(KeyEvent(vk, down: false));
-        }
-
-        var sent = Native.USER32.SendInput((uint)events.Count, events.ToArray(), Marshal.SizeOf<INPUT>());
-        return new MediaActionResponse
-        {
-            Accepted = sent == events.Count,
-            Action = action,
-            Detail = sent == events.Count
-                ? null
-                : $"SendInput delivered {sent} of {events.Count} events from the session agent " +
-                  $"(error {Marshal.GetLastWin32Error()}).",
-        };
-    }
+    public static MediaActionResponse SendVolumeKeyFromSession(ushort vk, int presses, string action)
+        => SendVolumeKey(vk, presses, action);
 
     /// <summary>
     /// The virtual key for a volume or mute action, for the session agent to inject.
@@ -255,34 +157,73 @@ public sealed class MediaController(ILogger<MediaController> log)
         _ => null,
     };
 
-    private MediaActionResponse SendVolumeKey(ushort vk, int repeats, string action)
+    /// <summary>
+    /// The batched key path. One batch is capped at <see cref="MaxVolumeStep"/> presses; a walk
+    /// longer than that is simply sent as several batches rather than being truncated. Before
+    /// this existed, moving from 0 to 100 sent 25 presses, stopped at 25, and every reply still
+    /// reported the volume as delivered - so a phone that asked for 60 and got 25 had no way to
+    /// notice that the two had never met.
+    /// </summary>
+    private static MediaActionResponse SendVolumeKey(ushort vk, int presses, string action)
     {
-        var events = new List<INPUT>(repeats * 2);
-        for (var i = 0; i < repeats; i++)
-        {
-            events.Add(KeyEvent(vk, down: true));
-            events.Add(KeyEvent(vk, down: false));
-        }
+        var attempted = 0;
+        var delivered = 0;
+        var total = VolumeKeyBatches(presses).Sum();
 
-        var sent = Native.USER32.SendInput((uint)events.Count, events.ToArray(), Marshal.SizeOf<INPUT>());
-        if (sent != events.Count)
+        foreach (var size in VolumeKeyBatches(presses))
         {
-            return new MediaActionResponse
+            var events = new List<INPUT>(size * 2);
+            for (var i = 0; i < size; i++)
             {
-                Accepted = false,
-                Action = action,
-                Detail = $"SendInput delivered {sent} of {events.Count} events (error {Marshal.GetLastWin32Error()}). " +
-                         "Volume keys must be injected from the interactive desktop.",
-            };
+                events.Add(KeyEvent(vk, down: true));
+                events.Add(KeyEvent(vk, down: false));
+            }
+
+            var sent = Native.USER32.SendInput((uint)events.Count, events.ToArray(), Marshal.SizeOf<INPUT>());
+            attempted += (int)sent;
+            delivered += (int)sent;
+
+            if (sent != events.Count)
+            {
+                return new MediaActionResponse
+                {
+                    Accepted = false,
+                    Action = action,
+                    Detail = $"SendInput delivered {attempted} of {total * 2} events " +
+                             $"(error {Marshal.GetLastWin32Error()}). Volume keys must be injected " +
+                             "from the interactive desktop.",
+                };
+            }
         }
 
-        return new MediaActionResponse
+        return new MediaActionResponse { Accepted = true, Action = action };
+    }
+
+    /// <summary>
+    /// How many presses go into each <c>SendInput</c> call for a walk of <paramref name="total"/>
+    /// presses.
+    /// <para>
+    /// Split out of <see cref="SendVolumeKey"/> because the rule it encodes is the part worth
+    /// testing, and the part that was wrong: one call is capped at <see cref="MaxVolumeStep"/>
+    /// presses, and the cap used to be applied to the *whole* walk instead of to one call.
+    /// Moving from 0 to 100 therefore sent 25 presses, stopped at 25, and reported the volume as
+    /// delivered. A phone that asked for 60 and got 25 had no way to notice that the two had
+    /// never met, because the reply never carried the number the PC landed on.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<int> VolumeKeyBatches(int total)
+    {
+        var remaining = Math.Max(1, total);
+        var batches = new List<int>();
+
+        while (remaining > 0)
         {
-            Accepted = true,
-            Action = action,
-            Volume = ReadVolume(),
-            IsMuted = ReadMuted(),
-        };
+            var size = Math.Min(MaxVolumeStep, remaining);
+            batches.Add(size);
+            remaining -= size;
+        }
+
+        return batches;
     }
 
     public MediaActionResponse Mute(bool muted)
@@ -290,7 +231,33 @@ public sealed class MediaController(ILogger<MediaController> log)
         var current = ReadMuted();
         if (current == muted)
         {
-            return new MediaActionResponse { Accepted = true, Action = muted ? "Mute" : "Unmute", IsMuted = current, Detail = "Already in the requested state." };
+            return new MediaActionResponse
+            {
+                Accepted = true,
+                Action = muted ? "Mute" : "Unmute",
+                IsMuted = current,
+                Detail = "Already in the requested state.",
+            };
+        }
+
+        // Write the flag rather than press the mute key. A key is a toggle, so pressing it while
+        // already muted unmutes - and a process that cannot read the flag has no way to know
+        // which half of that toggle it is standing in.
+        if (TryConnect() && _endpoint is not null && _endpoint.WriteMuted(muted))
+        {
+            var wrote = ReadMuted();
+            if (wrote is not null)
+            {
+                return new MediaActionResponse
+                {
+                    Accepted = wrote == muted,
+                    Action = muted ? "Mute" : "Unmute",
+                    IsMuted = wrote,
+                    Detail = wrote == muted
+                        ? "Mute state written through Core Audio."
+                        : "The mute flag was written but did not land in the requested state.",
+                };
+            }
         }
 
         var events = new[] { KeyEvent(WinConst.VK_VOLUME_MUTE, down: true), KeyEvent(WinConst.VK_VOLUME_MUTE, down: false) };
@@ -322,9 +289,32 @@ public sealed class MediaController(ILogger<MediaController> log)
             };
         }
 
-        // Walk to the target with real key presses so every consumer sees the change.
-        var delta = target - current.Value;
-        var step = delta > 0 ? VolumeUp(Math.Min(25, delta)) : VolumeDown(Math.Min(25, -delta));
+        // One COM call, not a walk. See CoreAudioEndpoint.WriteVolumeScalar for why the walk
+        // moved twice as far as asked and left the reply describing a volume still in motion.
+        var wrote = TryWriteVolume(target);
+        var afterWrite = ReadVolume();
+
+        if (wrote && afterWrite is not null && Math.Abs(afterWrite.Value - target) <= 1)
+        {
+            return new MediaActionResponse
+            {
+                Accepted = true,
+                Action = "volumeSet",
+                Volume = afterWrite,
+                IsMuted = ReadMuted(),
+                Detail = $"Set to {afterWrite.Value}% through Core Audio.",
+            };
+        }
+
+        // The write failed, or the level did not land within a rounding step of the target.
+        // Fall back to the key path - but now the press count comes from the endpoint's own
+        // step count, so the distance it travels is measured rather than assumed.
+        var delta = target - ((afterWrite ?? current) ?? current).Value;
+        var presses = VolumePressesForDelta(delta);
+
+        var step = delta == 0
+            ? new MediaActionResponse { Accepted = true, Action = "volumeSet", Volume = afterWrite ?? current, IsMuted = ReadMuted() }
+            : SendVolumeKey(delta > 0 ? WinConst.VK_VOLUME_UP : WinConst.VK_VOLUME_DOWN, presses, "volumeSet");
 
         return new MediaActionResponse
         {
@@ -332,19 +322,76 @@ public sealed class MediaController(ILogger<MediaController> log)
             Action = "volumeSet",
             Volume = ReadVolume(),
             IsMuted = ReadMuted(),
-            Detail = step.Accepted ? null : step.Detail,
+            Detail = step.Accepted
+                ? $"Core Audio would not take the level directly; moved it with {presses} key presses instead."
+                : step.Detail,
         };
+    }
+
+    /// <summary>
+    /// One direct write to an exact percentage, succeeding only if the level that came back is
+    /// within a rounding step of the one asked for.
+    /// <para>
+    /// The readback is the point. A write that returns success and leaves the volume somewhere
+    /// else is the same failure the walk had, just quieter, so the caller only believes the write
+    /// when the endpoint agrees it happened.
+    /// </para>
+    /// </summary>
+    internal bool TryWriteVolume(int targetPercent)
+    {
+        if (!TryConnect() || _endpoint is null)
+            return false;
+
+        return _endpoint.WriteVolumeScalar(targetPercent / (float)MaxVolume);
+    }
+
+    /// <summary>Same, with the step count read from the live endpoint.</summary>
+    internal int VolumePressesForDelta(int delta)
+        => VolumePressesForDelta(delta, _endpoint?.ReadStepCount());
+
+    /// <summary>
+    /// How many key presses move the volume by <paramref name="delta"/> percentage points when
+    /// the endpoint reports <paramref name="stepCount"/> steps across its range.
+    /// <para>
+    /// Not <c>|delta|</c>, which is what this used to be. A press moves 100/stepCount points -
+    /// about 1.96 on this machine, which reports 51 steps - so pressing |delta| times travels
+    /// roughly twice the intended distance. Asking for 55 from 100 pressed 45 times and landed
+    /// at 10.
+    /// </para>
+    /// <para>
+    /// A null or zero step count means the step could not be measured, and the old arithmetic is
+    /// kept: an unmeasured press is still worth making, and an exact number of presses is better
+    /// than no movement at all.
+    /// </para>
+    /// </summary>
+    internal static int VolumePressesForDelta(int delta, int? stepCount)
+    {
+        if (delta == 0)
+            return 0;
+
+        if (stepCount is not { } steps || steps <= 0)
+            return Math.Abs(delta);
+
+        return Math.Max(1, (int)Math.Round(Math.Abs(delta) * steps / (double)MaxVolume));
     }
 
     public MediaStateResponse GetState()
     {
         TryConnect();
 
+        // A failed read is not the number zero. The old `ReadVolume() ?? 0` made "this process
+        // cannot see an audio endpoint" indistinguishable from "the PC is silent", and the phone
+        // then spent every poll showing a confident 0 next to a slider the user had just moved.
+        var volume = ReadVolume();
+        var muted = ReadMuted();
+
         return new MediaStateResponse
         {
-            Volume = ReadVolume() ?? 0,
-            IsMuted = ReadMuted() ?? false,
-            DefaultDevice = _deviceName,
+            Volume = volume ?? 0,
+            VolumeKnown = volume is not null,
+            IsMuted = muted ?? false,
+            IsMuteKnown = muted is not null,
+            DefaultDevice = _endpoint?.FriendlyName,
             SessionPeak = 100,
             Supported = true,
             AvailableActions =
@@ -415,19 +462,4 @@ public sealed class MediaController(ILogger<MediaController> log)
             },
         },
     };
-
-    // ---- PROPERTYKEY helper ------------------------------------------------------
-
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct PropertyKey
-    {
-        public Guid fmtid;
-        public uint pid;
-
-        public PropertyKey(uint a, ushort b, ushort c, byte d, byte e, byte f, byte g, byte h, byte i, byte j, byte k, uint pid)
-        {
-            fmtid = new Guid(a, b, c, d, e, f, g, h, i, j, k);
-            this.pid = pid;
-        }
-    }
 }

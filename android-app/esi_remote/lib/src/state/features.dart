@@ -226,6 +226,15 @@ final appActionsProvider = Provider<AppActions>(AppActions.new);
 // =====================================================================================
 
 class MediaNotifier extends Notifier<AsyncSlice<MediaState>> {
+  /// The volume request currently on the wire, if any.
+  int? _inFlight;
+
+  /// The newest volume asked for but not yet sent. At most one is ever held.
+  int? _pending;
+
+  /// Completes when the send loop has nothing left to do.
+  Completer<void>? _idle;
+
   @override
   AsyncSlice<MediaState> build() {
     scheduleMicrotask(() => unawaited(refresh())); // Deferred (D45)
@@ -239,6 +248,85 @@ class MediaNotifier extends Notifier<AsyncSlice<MediaState>> {
       final json = await api.getJson('/media/state');
       return MediaState.fromJson(json);
     });
+  }
+
+  /// Sets the volume, collapsing a whole drag into as few requests as possible.
+  ///
+  /// [wait] makes the caller wait for the value to actually reach the PC, which is what the
+  /// release of a drag wants so it can report the outcome. A drag's intermediate previews pass
+  /// `wait: false` and cost nothing to call.
+  ///
+  /// The collapsing is the whole point. Every call overwrites [_pending] and returns; only the
+  /// send loop acts on it, and it sends one request at a time. Dragging a slider across its
+  /// track therefore produces a handful of requests instead of a hundred, the last one wins,
+  /// and the ones that never went out cannot come back later and undo the drag.
+    Future<({bool ok, String message})> setVolume(int target, {bool wait = false}) async {
+    final api = ref.read(apiProvider);
+    if (api == null) return (ok: false, message: 'No PC is selected.');
+
+    _pending = target;
+    final loop = _pump();
+
+    if (!wait) return (ok: true, message: 'sent');
+
+    await loop;
+    final slice = state;
+    return (
+      ok: slice.error == null,
+      message: slice.error ?? 'Volume set to $target.',
+    );
+  }
+
+  /// Drains [_pending] one value at a time.
+  ///
+  /// The loop stops on [_pending] being empty *or* on the notifier being disposed - the second
+  /// test is `ref.mounted`, positively. Written as `!ref.mounted` the loop exits immediately
+  /// every time, the send never happens, and every test in this file passes except the ones
+  /// that count requests. Nothing about the shape of the code gives that away.
+  ///
+  /// Never re-entered: a second caller finds [_inFlight] set and simply returns, leaving the
+  /// newest value in [_pending] for the running loop to pick up when it finishes.
+  Future<void> _pump() {
+    final running = _idle;
+    if (_inFlight != null && running != null) return running.future;
+
+    final completer = Completer<void>();
+    _idle = completer;
+
+    () async {
+      try {
+        while (_pending != null && ref.mounted) {
+          final value = _pending!;
+          _pending = null;
+          _inFlight = value;
+          try {
+            await _send('volumeSet', volume: value);
+          } finally {
+            _inFlight = null;
+          }
+        }
+      } finally {
+        if (!completer.isCompleted) completer.complete();
+      }
+    }();
+
+    return completer.future;
+  }
+
+  Future<void> _send(String action, {int? step, int? volume}) async {
+    final api = ref.read(apiProvider);
+    if (api == null) return;
+    try {
+      await api.postJson('/media/$action', body: <String, dynamic>{
+        'step': ?step,
+        'volume': ?volume,
+      });
+      await refresh();
+    } on EsiApiException catch (e) {
+      state = state.withError(e.displayMessage);
+    } on EsiNetworkException catch (e) {
+      state = state.withError(e.message);
+    }
   }
 
   Future<({bool ok, String message})> act(String action, {int? step, int? volume}) async {

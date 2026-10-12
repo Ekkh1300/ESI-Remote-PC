@@ -90,6 +90,17 @@ public interface ISessionAgentBridge
     bool SetMediaVolume(int target, string action, string deviceId);
 
     /// <summary>
+    /// Asks the session agent for the PC's volume, mute state and output device.
+    /// <para>
+    /// A question rather than a command, because the answer is the point: the service runs in
+    /// session 0 with no audio endpoint, so it cannot read any of this itself and every poll it
+    /// answered from its own <c>MediaController</c> came back 0. Returns null when the agent did
+    /// not answer in time, which the caller reports as "unknown" rather than as a silent PC.
+    /// </para>
+    /// </summary>
+    Task<MediaStateFromAgent?> QueryMediaStateAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Asks the session agent to inject a transport key. Injected from session 0 the call
     /// succeeds and reaches nothing, so the phone was answered 200 and nothing happened (D43).
     /// </summary>
@@ -100,6 +111,19 @@ public interface ISessionAgentBridge
 
     /// <summary>Asks the session agent to stop any active screen stream.</summary>
     bool StopCapture(string deviceId);
+
+    /// <summary>
+    /// Asks the session agent to open the output device for loopback capture.
+    /// </summary>
+    /// <remarks>
+    /// Returns whether the request was delivered, not whether audio is flowing. The device opens
+    /// asynchronously and can refuse several hundred milliseconds later, so the truth only
+    /// exists in the session agent's log and on the phone's meter.
+    /// </remarks>
+    bool RequestAudio(string deviceId);
+
+    /// <summary>Closes the loopback device.</summary>
+    bool StopAudio(string deviceId);
 
     /// <summary>
     /// Asks the session agent to show the pairing approval prompt.
@@ -233,7 +257,45 @@ public sealed class SessionAgentMessage
     public List<SessionAgentDisplay>? Displays { get; set; }
     public List<SessionAgentApp>? Apps { get; set; }
     public List<SessionAgentEvent>? Events { get; set; }
+
+    // ---- media state, carried by media replies --------------------------------------
+    //
+    // Filled in by the session agent, which is the only process that can read them: the
+    // service sits in session 0 with no audio endpoint (D43). The *Known flags travel with the
+    // values because a missing read is not a zero, and "I cannot see the volume" must not be
+    // indistinguishable from "the PC is silent" once it crosses the pipe.
+
+    /// <summary>The PC's default output volume, 0-100.</summary>
+    public int? Volume { get; set; }
+
+    /// <summary>Whether <see cref="Volume"/> was read rather than left at its default.</summary>
+    public bool? VolumeKnown { get; set; }
+
+    public bool? IsMuted { get; set; }
+
+    /// <summary>Whether <see cref="IsMuted"/> was read rather than left at its default.</summary>
+    public bool? IsMuteKnown { get; set; }
+
+    /// <summary>The user-visible name of the default output, e.g. "Speakers (Realtek(R) Audio)".</summary>
+    public string? DefaultDevice { get; set; }
 }
+
+/// <summary>
+/// The media state as the session agent read it, with the "could I read it at all" answers kept
+/// beside the values.
+/// <para>
+/// Deliberately not <see cref="Esi.Protocol.MediaStateResponse"/>: that type is what goes to the
+/// phone, and the two must be able to disagree, because the service has its own fallback when
+/// there is no agent to ask. Collapsing them would make "the agent said unknown" and "the
+/// service guessed" look the same from the outside.
+/// </para>
+/// </summary>
+public sealed record MediaStateFromAgent(
+    int Volume,
+    bool VolumeKnown,
+    bool IsMuted,
+    bool IsMuteKnown,
+    string? DefaultDevice);
 
 public sealed class SessionAgentDisplay
 {
@@ -331,6 +393,21 @@ public static class SessionChannelProtocol
         public const string Input = "input";
         public const string CaptureStart = "capture.start";
         public const string CaptureStop = "capture.stop";
+
+        /// <summary>
+        /// Opens the default output device for loopback capture, so the phone can play what the
+        /// PC is playing.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="CaptureStart"/> because the two fail independently and for
+        /// entirely different reasons. A machine with no sound card can still show its screen
+        /// perfectly well, and a machine whose screen capture is refused still has audio worth
+        /// hearing. Folding them together would mean one broken thing took out both.
+        /// </remarks>
+        public const string AudioStart = "audio.start";
+
+        /// <summary>Closes the loopback device. The counterpart to AudioStart.</summary>
+        public const string AudioStop = "audio.stop";
         public const string PairingPrompt = "pairing.prompt";
         public const string PairingCompleted = "pairing.completed";
         public const string LaunchApp = "app.launch";
@@ -346,6 +423,18 @@ public static class SessionChannelProtocol
         /// Moves the volume to an absolute target, computed where the volume can be read (D43).
         /// </summary>
         public const string MediaVolumeSet = "media.volumeSet";
+
+        /// <summary>
+        /// Asks the session agent for the volume, mute state and output device name.
+        /// <para>
+        /// The read has to happen there for the same reason the write does: the service runs in
+        /// session 0 with no audio endpoint, so it cannot see the volume at all (D43). Without
+        /// this the phone polled the service, the service answered from a process that has
+        /// never been able to open Core Audio, and every poll came back 0 - next to a slider the
+        /// user had just moved, with nothing on screen saying which of the two was real.
+        /// </para>
+        /// </summary>
+        public const string MediaStateQuery = "media.stateQuery";
 
         /// <summary>
         /// Injects a transport key from the interactive desktop. These were the quiet half of D43:

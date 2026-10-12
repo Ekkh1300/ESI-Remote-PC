@@ -12,6 +12,7 @@ import '../state/metrics.dart';
 import 'format.dart';
 import 'theme.dart';
 import 'widgets/load_trace.dart';
+import 'widgets/nav_rail.dart';
 import 'widgets/panel.dart';
 import 'widgets/states.dart';
 
@@ -25,13 +26,37 @@ class AppShell extends ConsumerWidget {
 
   final StatefulNavigationShell navigationShell;
 
-  static const List<_Destination> _destinations = <_Destination>[
-    _Destination('Dashboard', Icons.speed_outlined, Icons.speed, '/dashboard'),
-    _Destination('Power', Icons.power_settings_new_outlined, Icons.power_settings_new, '/power'),
-    _Destination('Apps', Icons.apps_outlined, Icons.apps, '/apps'),
-    _Destination('Screen', Icons.desktop_windows_outlined, Icons.desktop_windows, '/remote'),
-    _Destination('Control', Icons.tune_outlined, Icons.tune, '/media'),
+  static const List<EsiNavDestination> destinations = <EsiNavDestination>[
+    EsiNavDestination(
+      label: 'Dashboard',
+      icon: Icons.speed_outlined,
+      selectedIcon: Icons.speed,
+    ),
+    EsiNavDestination(
+      label: 'Power',
+      icon: Icons.power_settings_new_outlined,
+      selectedIcon: Icons.power_settings_new,
+    ),
+    EsiNavDestination(
+      label: 'Apps',
+      icon: Icons.apps_outlined,
+      selectedIcon: Icons.apps,
+    ),
+    EsiNavDestination(
+      label: 'Screen',
+      icon: Icons.desktop_windows_outlined,
+      selectedIcon: Icons.desktop_windows,
+    ),
+    EsiNavDestination(
+      label: 'Control',
+      icon: Icons.tune_outlined,
+      selectedIcon: Icons.tune,
+      pinnedToBottom: true,
+    ),
   ];
+
+  /// Control carries the unread badge, because notifications are what that tab is about.
+  static const String badgeDestination = 'Control';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -45,10 +70,12 @@ class AppShell extends ConsumerWidget {
           Expanded(
             child: Row(
               children: <Widget>[
-                _NavRail(
+                EsiNavRail(
+                  destinations: destinations,
                   currentIndex: navigationShell.currentIndex,
                   unread: unread,
                   online: connection.isOnline,
+                  showUnreadOn: badgeDestination,
                   onSelect: (index) => navigationShell.goBranch(
                     index,
                     // Tapping the current tab pops it back to its root, which is what a
@@ -62,148 +89,6 @@ class AppShell extends ConsumerWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _Destination {
-  const _Destination(this.label, this.icon, this.selectedIcon, this.prefix);
-  final String label;
-  final IconData icon;
-  final IconData selectedIcon;
-
-  /// Every screen under this tab starts with this path segment.
-  final String prefix;
-}
-
-class _NavRail extends StatelessWidget {
-  const _NavRail({
-    required this.currentIndex,
-    required this.onSelect,
-    required this.unread,
-    required this.online,
-  });
-
-  final int currentIndex;
-  final ValueChanged<int> onSelect;
-  final int unread;
-  final bool online;
-
-  @override
-  Widget build(BuildContext context) {
-    const destinations = AppShell._destinations;
-    return Container(
-      width: 74,
-      color: EsiPalette.void_.withValues(alpha: 0.6),
-      child: SafeArea(
-        right: false,
-        child: Column(
-          children: <Widget>[
-            const SizedBox(height: EsiSpace.md),
-            for (var i = 0; i < destinations.length; i++)
-              Expanded(
-                child: _RailButton(
-                  destination: destinations[i],
-                  selected: i == currentIndex,
-                  badge: destinations[i].prefix == '/media' && unread > 0 ? unread : 0,
-                  offline: !online,
-                  onTap: () => onSelect(i),
-                ),
-              ),
-            const SizedBox(height: EsiSpace.sm),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RailButton extends StatelessWidget {
-  const _RailButton({
-    required this.destination,
-    required this.selected,
-    required this.onTap,
-    required this.offline,
-    this.badge = 0,
-  });
-
-  final _Destination destination;
-  final bool selected;
-  final VoidCallback onTap;
-  final bool offline;
-  final int badge;
-
-  @override
-  Widget build(BuildContext context) {
-    final colour = selected ? EsiPalette.signal : EsiPalette.dim;
-    return Semantics(
-      selected: selected,
-      button: true,
-      label: badge > 0 ? '${destination.label}, $badge unread' : destination.label,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          width: double.infinity,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              // The selected marker is a bar in the gutter, matching the panel signal
-              // ticks: the same structural device everywhere.
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                width: selected ? 3 : 0,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: EsiPalette.signal,
-                  borderRadius: EsiRadius.chip,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Stack(
-                clipBehavior: Clip.none,
-                children: <Widget>[
-                  Icon(
-                    selected ? destination.selectedIcon : destination.icon,
-                    size: 21,
-                    color: offline ? EsiPalette.faint : colour,
-                  ),
-                  if (badge > 0)
-                    Positioned(
-                      right: -7,
-                      top: -5,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                        constraints: const BoxConstraints(minWidth: 15),
-                        decoration: BoxDecoration(
-                          color: EsiPalette.alarm,
-                          borderRadius: EsiRadius.chip,
-                        ),
-                        child: Text(
-                          badge > 99 ? '99+' : '$badge',
-                          textAlign: TextAlign.center,
-                          style: EsiType.label.copyWith(
-                            color: EsiPalette.void_,
-                            fontSize: 8.5,
-                            letterSpacing: 0,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 3),
-              Text(
-                destination.label,
-                style: EsiType.label.copyWith(
-                  color: selected ? EsiPalette.ink : EsiPalette.faint,
-                  fontSize: 8.5,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

@@ -129,6 +129,29 @@ public static class FrameTypes
     /// </para>
     /// </summary>
     public const ushort CameraFrame = 4;
+
+    /// <summary>
+    /// Audio from the PC to the phone, so the phone can play what the machine is playing.
+    ///
+    /// <para>
+    /// It arrives on the same binary WebSocket as the screen and the camera, which is why it is
+    /// a <c>FrameType</c> on the same header rather than a channel of its own: the phone's
+    /// decoder already reads a 32-byte header off the front of every binary message, and giving
+    /// audio a second framing would mean a second reader and a second place for the two to
+    /// disagree.
+    /// </para>
+    ///
+    /// <para>
+    /// The audio fields reuse width, height and tile count rather than adding members, because
+    /// the header is a fixed 32 bytes and both ends read it by offset (PROTOCOL.md §7.5). For
+    /// audio, <c>ScreenWidth</c> is the sample rate in Hz, <c>ScreenHeight</c> is the channel
+    /// count, and <c>TileCount</c> is unused because µ-law frames carry no block structure at
+    /// all - a chunk is just a run of samples. The names are wrong for what they carry and that
+    /// is a deliberate, documented lie: widening the struct would move every later field and
+    /// break the screen path that is already deployed.
+    /// </para>
+    /// </summary>
+    public const ushort AudioChunk = 5;
 }
 
 public static class Codecs
@@ -136,6 +159,23 @@ public static class Codecs
     public const ushort Jpeg = 1;
     /// <summary>Reserved for the future: a real RDP graphics pipeline / RemoteFX style codec.</summary>
     public const ushort RdpGraphicsPipeline = 2;
+
+    /// <summary>
+    /// G.711 mu-law: the codec this ships for audio.
+    /// </summary>
+    /// <remarks>
+    /// Opus is the codec one would reach for, and it stays reserved. It would need a native
+    /// encoder here and a native decoder inside the APK, and this repository has no native build
+    /// at all - no NDK invocation, no CMake, no checked-in <c>jniLibs</c>. Either half of that
+    /// would be code that could not be compiled, tested, or run on a device, which is worse than
+    /// a slower codec that works.
+    /// <para>
+    /// mu-law is 48 KB/s for stereo at 24 kHz, against 100-150 KB for a single screen frame, and
+    /// it is about 38 dB of signal-to-noise ratio: telephone quality. It is also memoryless, so
+    /// there is no quantiser state for two independent implementations to disagree about.
+    /// </para>
+    /// </remarks>
+    public const ushort MuLaw = 3;
 }
 
 /// <summary>Per-tile descriptor that precedes each tile's JPEG payload.</summary>

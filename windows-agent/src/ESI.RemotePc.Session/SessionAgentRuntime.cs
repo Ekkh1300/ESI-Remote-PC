@@ -27,6 +27,7 @@ internal sealed class SessionAgentRuntime : ApplicationContext
     private readonly Esi.Platform.Capture.ScreenStreamEncoder _encoder;
     private readonly Esi.Platform.Input.InputInjector _injector;
     private readonly CapturePump _capturePump;
+    private readonly AudioPump _audioPump;
     private readonly InputPump _inputPump;
 
     /// <summary>
@@ -68,6 +69,7 @@ internal sealed class SessionAgentRuntime : ApplicationContext
             new SerilogLoggerAdapter<Esi.Platform.Media.MediaController>(_log));
 
         _capturePump = new CapturePump(_log, _capture, _encoder, _channel);
+        _audioPump = new AudioPump(_log, _channel);
         _inputPump = new InputPump(_log, _injector);
 
         _channel.CommandReceived += OnCommandAsync;
@@ -252,6 +254,28 @@ internal sealed class SessionAgentRuntime : ApplicationContext
                     .ConfigureAwait(false);
                 break;
 
+            case SessionChannelProtocol.Commands.AudioStart:
+                // The reply says the request was accepted, not that sound is coming. The device
+                // opens asynchronously and can refuse afterwards; the honest confirmation is the
+                // phone's meter moving, and the failure is in this agent's log. Claiming success
+                // here would put the two on different stories and the user in the middle.
+                _audioPump.Start(command.DeviceId ?? "");
+                await CommandResultAsync(
+                    command,
+                    "audio.start",
+                    _audioPump.IsRunning,
+                    _audioPump.IsRunning
+                        ? "The output device is open for loopback capture."
+                        : "The output device could not be opened for loopback capture. See the agent log.")
+                    .ConfigureAwait(false);
+                break;
+
+            case SessionChannelProtocol.Commands.AudioStop:
+                _audioPump.Stop();
+                await CommandResultAsync(command, "audio.stop", true, "Audio capture was stopped.")
+                    .ConfigureAwait(false);
+                break;
+
             case SessionChannelProtocol.Commands.PairingPrompt:
                 await ShowPairingPromptAsync(command).ConfigureAwait(false);
                 break;
@@ -280,6 +304,10 @@ internal sealed class SessionAgentRuntime : ApplicationContext
 
             case SessionChannelProtocol.Commands.MediaVolumeSet:
                 SetMediaVolume(command);
+                break;
+
+            case SessionChannelProtocol.Commands.MediaStateQuery:
+                ReplyMediaState(command);
                 break;
 
             case SessionChannelProtocol.Commands.ShowToast:
@@ -685,38 +713,112 @@ internal sealed class SessionAgentRuntime : ApplicationContext
     /// <see cref="Esi.Platform.Media.MediaController"/> does the read, presses the keys, and reads
     /// again (D43).
     /// </para>
+    /// <para>
+    /// The read is also what makes the walk *correct*, which for a long time it was not. The old
+    /// code took <c>GetState().Volume</c>, which reports 0 when the volume cannot be read, so the
+    /// walk was always computed from a base of zero. Asking for 30 on a PC already at 100 pressed
+    /// volume-up thirty times; asking for 60 pressed sixty. Every one of those replies said the
+    /// volume had been delivered, and the PC never moved.
+    /// </para>
     /// </summary>
     private void SetMediaVolume(SessionCommandEnvelope command)
     {
         var target = Math.Clamp(command.Repeats ?? 50, 0, 100);
-        var controller = _media;
-
-        var current = controller.GetState().Volume;
-        var delta = target - current;
         var action = command.Action ?? "volumeSet";
 
+        var before = _media.GetState();
         Esi.Protocol.MediaActionResponse result;
-        if (delta == 0)
+
+        if (!before.VolumeKnown)
         {
-            // Already there. The mute state is still reported, because the phone asked for a
-            // slider position and deserves to be told the truth about it.
-            result = new Esi.Protocol.MediaActionResponse { Accepted = true, Action = action };
+            // A walk is computed from where the volume is, so a volume we cannot read leaves no
+            // honest walk to send. Pressing `target` presses from an assumed zero is the bug
+            // above, and it is far worse than saying no.
+            result = new Esi.Protocol.MediaActionResponse
+            {
+                Accepted = false,
+                Action = action,
+                Detail = "This PC's volume could not be read, so it cannot be moved to an exact " +
+                         "level. The volume keys still work; use volumeUp/volumeDown instead.",
+            };
         }
         else
         {
-            result = Esi.Platform.Media.MediaController.SendVolumeKeyFromSession(
-                delta > 0 ? Esi.Platform.Native.WinConst.VK_VOLUME_UP : Esi.Platform.Native.WinConst.VK_VOLUME_DOWN,
-                Math.Abs(delta),
-                action);
+            // Same code the service would have run, not a private copy of it. This used to
+            // re-derive the walk here, which is how two walk implementations ended up disagreeing
+            // about how far a press moves: the endpoint reports 51 steps, so a press is ~1.96
+            // points and pressing |delta| times travels twice as far as asked.
+            result = new Esi.Protocol.MediaActionResponse
+            {
+                Accepted = _media.SetVolume(target).Accepted,
+                Action = action,
+                Volume = target,
+                IsMuted = before.IsMuted,
+            };
         }
 
+        // Re-read after the presses land. The reply is the phone's only sight of the PC, and
+        // reporting the volume as it was *before* the walk is how a control ends up arguing
+        // with the number the user just set.
+        var after = _media.GetState();
+
         Log.Information("Volume {Action} {From} -> {To} for {Device}: {Outcome}",
-            action, current, target, command.DeviceId ?? "the phone",
+            action, before.VolumeKnown ? before.Volume.ToString() : "unknown", target,
+            command.DeviceId ?? "the phone",
             result.Accepted ? "delivered" : "was not delivered");
 
-        _ = CommandResultAsync(command, "media.volumeSet", result.Accepted,
-            result.Detail ?? $"{action} was sent.");
+        _ = CommandResultWithMediaAsync(command, "media.volumeSet", result.Accepted,
+            result.Detail ?? $"{action} was sent.", after);
     }
+
+    /// <summary>
+    /// Answers a question about the PC's media state.
+    /// <para>
+    /// The service cannot answer this itself: it is in session 0, gets no audio endpoint, and
+    /// used to report a confident 0 for a PC sitting at 100 (D43).
+    /// </para>
+    /// </summary>
+    private void ReplyMediaState(SessionCommandEnvelope command)
+    {
+        var state = _media.GetState();
+
+        Log.Debug("Media state asked for {Device}: volume {Volume} (known={Known})",
+            command.DeviceId ?? "the phone", state.Volume, state.VolumeKnown);
+
+        _ = CommandResultWithMediaAsync(command, "media.stateQuery", succeeded: true,
+            state.VolumeKnown
+                ? "The volume was read from the PC."
+                : "The PC's volume could not be read.", state);
+    }
+
+    /// <summary>
+    /// A command result that also carries the PC's media state.
+    /// <para>
+    /// Both parts matter and neither replaces the other: <c>Succeeded</c> says whether the
+    /// command did what was asked, and the media fields say what the PC is doing now. A caller
+    /// that read only the first would still be guessing at the second, which is what the phone
+    /// was doing before this existed.
+    /// </para>
+    /// </summary>
+    private Task CommandResultWithMediaAsync(
+        SessionCommandEnvelope command,
+        string name,
+        bool succeeded,
+        string? detail,
+        Esi.Protocol.MediaStateResponse state)
+        => _channel.SendAsync(new SessionAgentMessage
+        {
+            T = SessionChannelProtocol.Events.CommandResult,
+            CorrelationId = command.CorrelationId,
+            Succeeded = succeeded,
+            Detail = succeeded ? detail : null,
+            Error = succeeded ? null : detail,
+            Volume = state.Volume,
+            VolumeKnown = state.VolumeKnown,
+            IsMuted = state.IsMuted,
+            IsMuteKnown = state.IsMuteKnown,
+            DefaultDevice = state.DefaultDevice,
+        });
 
     private Task CommandResultAsync(SessionCommandEnvelope command, string name, bool succeeded, string? detail)
         => _channel.SendAsync(new SessionAgentMessage

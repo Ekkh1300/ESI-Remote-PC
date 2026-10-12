@@ -1426,6 +1426,8 @@ class MediaState {
     required this.sessionPeak,
     required this.availableActions,
     required this.supported,
+    this.volumeKnown = true,
+    this.isMuteKnown = true,
   });
 
   factory MediaState.fromJson(Map<String, dynamic> json) => MediaState(
@@ -1435,6 +1437,8 @@ class MediaState {
         sessionPeak: asInt(json['sessionPeak']),
         availableActions: asStringList(json['availableActions']),
         supported: asBool(json['supported'], true),
+        volumeKnown: asBool(json['volumeKnown'], true),
+        isMuteKnown: asBool(json['isMuteKnown'], true),
       );
 
   final int volume;
@@ -1444,7 +1448,26 @@ class MediaState {
   final List<String> availableActions;
   final bool supported;
 
+  /// Whether [volume] was actually read off the PC, or is a placeholder.
+  ///
+  /// Defaults to true so an agent that predates the flag keeps working; the failure it protects
+  /// against is the agent answering a poll from a process that cannot see an audio endpoint
+  /// (session 0), which reports 0 - and 0 is also a perfectly normal volume, so the phone had no
+  /// way to tell "the PC is silent" from "the PC cannot be asked".
+  final bool volumeKnown;
+
+  /// Whether [isMuted] was read rather than assumed. Same reasoning as [volumeKnown].
+  final bool isMuteKnown;
+
   bool can(String action) => availableActions.isEmpty || availableActions.contains(action);
+
+  /// Whether the volume control can be used at all.
+  ///
+  /// False when the PC's level could not be read, and not merely when the agent disallows
+  /// `volumeSet`. A slider that moves and then snaps back to a number nobody measured is worse
+  /// than one that says it cannot be used: the first looks like the PC refusing, the second
+  /// looks like the app working.
+  bool get canSetVolume => can('volumeSet') && volumeKnown;
 }
 
 class MediaActionResult {

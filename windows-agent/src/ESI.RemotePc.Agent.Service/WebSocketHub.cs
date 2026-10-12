@@ -153,6 +153,30 @@ public sealed class RemoteService
         sessionAgent.StopCapture(deviceId);
         log.LogInformation("Remote stream for {DeviceId} stopped", deviceId);
     }
+
+    /// <summary>
+    /// Opens the PC's output device for loopback capture so the phone can be the speaker.
+    /// </summary>
+    /// <remarks>
+    /// Audited separately from the screen stream because the two are separate decisions with
+    /// separate costs: audio continues even where screen capture is refused, and a user who turns
+    /// the picture off has not asked to silence the phone.
+    /// </remarks>
+    public bool StartAudio(string deviceId)
+    {
+        if (!sessionAgent.IsConnected)
+            return false;
+
+        audit.Record(AuditLog.ActionRemoteStarted, "ok", deviceId, detail: "pc audio (loopback)");
+
+        return sessionAgent.RequestAudio(deviceId);
+    }
+
+    public void StopAudio(string deviceId)
+    {
+        sessionAgent.StopAudio(deviceId);
+        log.LogInformation("PC audio for {DeviceId} stopped", deviceId);
+    }
 }
 
 /// <summary>One connected phone.</summary>

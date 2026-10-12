@@ -440,6 +440,103 @@ void main() {
     });
   });
 
+  group('MediaState', () {
+    test('parses the documented response', () {
+      final state = MediaState.fromJson(<String, dynamic>{
+        'volume': 62,
+        'volumeKnown': true,
+        'isMuted': false,
+        'isMuteKnown': true,
+        'defaultDevice': 'Speakers (Realtek(R) Audio)',
+        'sessionPeak': 100,
+        'availableActions': <String>['volumeUp', 'volumeDown', 'volumeSet'],
+        'supported': true,
+      });
+
+      expect(state.volume, 62);
+      expect(state.volumeKnown, isTrue);
+      expect(state.isMuted, isFalse);
+      expect(state.isMuteKnown, isTrue);
+      expect(state.defaultDevice, 'Speakers (Realtek(R) Audio)');
+    });
+
+    test('a volume that could not be read stays unknown rather than becoming a zero', () {
+      // The whole defect this flag exists for. The agent answered a poll from a process that
+      // could not open an audio endpoint at all - the Windows service, in session 0 - and the
+      // number it had for "unknown" was 0. Zero is also a perfectly ordinary volume, so the
+      // phone showed a confident silent beside a slider the user had just moved, and nothing on
+      // the screen said which of the two was real.
+      //
+      // Same shape as the metrics tests above: a value the machine could not supply must stay
+      // distinguishable from a value the machine supplied.
+      final state = MediaState.fromJson(<String, dynamic>{
+        'volume': 0,
+        'volumeKnown': false,
+        'isMuted': false,
+        'isMuteKnown': false,
+        'defaultDevice': null,
+        'sessionPeak': 100,
+        'availableActions': <String>['volumeSet'],
+        'supported': true,
+      });
+
+      expect(state.volumeKnown, isFalse,
+          reason: 'an unreadable volume came back looking like a definite zero');
+      expect(state.isMuteKnown, isFalse);
+
+      // And the control goes with it. A slider that still accepts a drag here would move,
+      // commit, and then snap back to a number nobody measured - which reads as the PC refusing
+      // the change, when the truth is that the PC was never asked.
+      expect(state.canSetVolume, isFalse);
+    });
+
+    test('the volume control is usable when the agent allows it and the level was read', () {
+      final state = MediaState.fromJson(<String, dynamic>{
+        'volume': 44,
+        'volumeKnown': true,
+        'isMuted': false,
+        'isMuteKnown': true,
+        'sessionPeak': 100,
+        'availableActions': <String>['volumeSet', 'volumeUp', 'volumeDown'],
+        'supported': true,
+      });
+
+      expect(state.canSetVolume, isTrue);
+    });
+
+    test('an agent that disallows volumeSet still disables the control', () {
+      // The other half of the same getter: a read level is not enough on its own.
+      final state = MediaState.fromJson(<String, dynamic>{
+        'volume': 44,
+        'volumeKnown': true,
+        'isMuted': false,
+        'isMuteKnown': true,
+        'sessionPeak': 100,
+        'availableActions': <String>['volumeUp', 'volumeDown'],
+        'supported': true,
+      });
+
+      expect(state.can('volumeSet'), isFalse);
+      expect(state.canSetVolume, isFalse);
+    });
+
+    test('an agent that predates the flags is still read as knowing the volume', () {
+      // Defaults to true, so a 1.0.1 agent without the flags keeps working instead of greying
+      // out every slider it has. The failure to guard against is the flag being *present* and
+      // false, not the flag being absent.
+      final state = MediaState.fromJson(<String, dynamic>{
+        'volume': 30,
+        'isMuted': true,
+        'sessionPeak': 100,
+        'availableActions': <String>[],
+        'supported': true,
+      });
+
+      expect(state.volumeKnown, isTrue);
+      expect(state.isMuteKnown, isTrue);
+    });
+  });
+
   group('errors', () {
     test('parses the error envelope', () {
       final body = EsiApiErrorBody.fromJson(<String, dynamic>{

@@ -9,7 +9,23 @@ namespace Esi.Protocol;
 public sealed class MediaStateResponse
 {
     [JsonPropertyName("volume")] public int Volume { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="Volume"/> was actually read from the PC, or is a placeholder.
+    /// <para>
+    /// False inside the Windows service, which runs in session 0 and gets no audio endpoint, so
+    /// it cannot see the volume at all. Reporting a bare 0 without this made "I cannot tell"
+    /// look exactly like "the PC is silent", and a phone that had just moved its slider could
+    /// not tell that the two had never met.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("volumeKnown")] public bool VolumeKnown { get; set; } = true;
+
     [JsonPropertyName("isMuted")] public bool IsMuted { get; set; }
+
+    /// <summary>Whether <see cref="IsMuted"/> was read rather than assumed. Same reasoning as <see cref="VolumeKnown"/>.</summary>
+    [JsonPropertyName("isMuteKnown")] public bool IsMuteKnown { get; set; } = true;
+
     [JsonPropertyName("defaultDevice")] public string? DefaultDevice { get; set; }
     [JsonPropertyName("sessionPeak")] public int SessionPeak { get; set; }
     [JsonPropertyName("availableActions")] public List<string> AvailableActions { get; set; } = [];
