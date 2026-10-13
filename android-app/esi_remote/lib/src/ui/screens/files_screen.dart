@@ -378,7 +378,17 @@ class _EntryRow extends ConsumerWidget {
   Future<void> _menu(BuildContext context, WidgetRef ref, FileEntry entry) async {
     await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
+      // Named, not left as `context`, and the name is the whole fix.
+      //
+      // Each ListTile below popped the sheet and then handed *this* context to the action.
+      // The action awaits a dialog - a rename prompt, a delete confirmation - and comes back
+      // to a context its own pop had already unmounted. `context.mounted` was therefore false
+      // and the action returned before issuing the request: the user tapped Delete, confirmed
+      // "Delete", and the file was still there with no message. Rename behaved the same way.
+      //
+      // Renaming the parameter makes the shadowing impossible to write by accident, and the
+      // actions are passed the screen's context below, which outlives the sheet.
+      builder: (sheetContext) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
@@ -403,7 +413,8 @@ class _EntryRow extends ConsumerWidget {
                 leading: const Icon(Icons.drive_file_rename_outline),
                 title: const Text('Rename'),
                 onTap: () {
-                  Navigator.of(context).pop();
+                  Navigator.of(sheetContext).pop();
+                  // The screen's context, not the sheet's: this outlives the sheet.
                   _rename(context, ref, entry);
                 },
               ),
@@ -412,7 +423,7 @@ class _EntryRow extends ConsumerWidget {
                 leading: const Icon(Icons.drive_file_move_outline),
                 title: const Text('Move to…'),
                 onTap: () {
-                  Navigator.of(context).pop();
+                  Navigator.of(sheetContext).pop();
                   _move(context, ref, entry);
                 },
               ),
@@ -424,7 +435,7 @@ class _EntryRow extends ConsumerWidget {
                   style: TextStyle(color: EsiPalette.alarm),
                 ),
                 onTap: () {
-                  Navigator.of(context).pop();
+                  Navigator.of(sheetContext).pop();
                   _delete(context, ref, entry);
                 },
               ),
@@ -479,7 +490,9 @@ class _EntryRow extends ConsumerWidget {
     final roots = ref.read(fileRootsProvider).value?.roots ?? const <FileRoot>[];
     await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
+      // Same shadowing as `_menu` above; see the note there. The action runs after this
+      // sheet is gone, so it needs the screen's context, not this builder's.
+      builder: (sheetContext) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
@@ -493,10 +506,12 @@ class _EntryRow extends ConsumerWidget {
                 title: Text(root.label.isEmpty ? root.path : root.label),
                 subtitle: Text(root.path, style: EsiType.mono.copyWith(fontSize: 10)),
                 onTap: () async {
-                  Navigator.of(context).pop();
+                  Navigator.of(sheetContext).pop();
                   final target = '${root.path}\\${entry.name}';
                   final outcome =
                       await ref.read(filesProvider.notifier).move(entry.path, target);
+                  // The move itself always ran; only its result was being dropped here,
+                  // because the sheet's context was already unmounted by the pop above.
                   if (!context.mounted) return;
                   showOutcome(context, outcome);
                 },
@@ -608,7 +623,11 @@ Future<void> _showAddMenu(BuildContext context, WidgetRef ref, FilesState state)
   final notifier = ref.read(filesProvider.notifier);
   await showModalBottomSheet<void>(
     context: context,
-    builder: (context) => SafeArea(
+    // The same shadowing as `_menu`, with the same consequence: both actions pop this sheet
+    // and then run to completion, so the `context.mounted` check at the end is testing the
+    // sheet rather than the screen and always fails. Creation and upload did happen; the user
+    // was simply never told whether they had worked.
+    builder: (sheetContext) => SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
@@ -620,7 +639,7 @@ Future<void> _showAddMenu(BuildContext context, WidgetRef ref, FilesState state)
             leading: const Icon(Icons.create_new_folder_outlined),
             title: const Text('New folder'),
             onTap: () async {
-              Navigator.of(context).pop();
+              Navigator.of(sheetContext).pop();
               final current = ref.read(filesProvider).currentPath ?? '';
               final controller = TextEditingController(text: 'New folder');
               final name = await _askForText(
@@ -645,7 +664,7 @@ Future<void> _showAddMenu(BuildContext context, WidgetRef ref, FilesState state)
               style: EsiType.mono.copyWith(fontSize: 10),
             ),
             onTap: () async {
-              Navigator.of(context).pop();
+              Navigator.of(sheetContext).pop();
               final path = await _pickFile();
               if (path == null) return;
               final current = ref.read(filesProvider).currentPath ?? '';

@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Esi.Protocol;
@@ -210,7 +211,7 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
             var scaled = width != display.Width || height != display.Height;
 
             // CopyFromScreen takes the source rectangle in screen coordinates and cannot
-            // scale, so a downscaled capture copies the full width and resizes afterwards.
+            // scale, so a downscaled capture copies the full display and resizes afterwards.
             if (scaled)
             {
                 using var full = new Bitmap(
@@ -220,30 +221,24 @@ public sealed class GdiScreenCaptureProvider(ILogger<GdiScreenCaptureProvider> l
                     g.CopyFromScreen(display.X, display.Y, 0, 0, full.Size);
                 }
 
-                var raw = new byte[full.Width * 4 * full.Height];
-                var source = full.LockBits(
-                    new Rectangle(0, 0, full.Width, full.Height),
-                    ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                try
-                {
-                    Marshal.Copy(source.Scan0, raw, 0, raw.Length);
-                }
-                finally
-                {
-                    full.UnlockBits(source);
-                }
-
+                // "Resizes afterwards" used to mean a Marshal.Copy of the first
+                // `stride * height` bytes of that full-resolution buffer straight into the
+                // small bitmap. The copy length matched the destination exactly, so it never
+                // faulted, never logged and always reported a good frame - it just filled the
+                // target with successive chunks of the source's first *rows*, which come out
+                // as a sheared crop of the top-left corner rather than a shrunken picture.
+                // It also allocated a full-resolution byte array on every single frame: 33 MB
+                // at 4K, at the capture rate, all of it garbage a moment later.
+                //
+                // GDI+ already does the resize; DrawImage into a destination rectangle is the
+                // whole operation, and the destination is the same 32bpp ARGB DIB section that
+                // the unscaled path below proved produces a real picture on this machine.
                 using var resized = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-                var target = resized.LockBits(
-                    new Rectangle(0, 0, width, height),
-                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-                try
+                using (var g = Graphics.FromImage(resized))
                 {
-                    Marshal.Copy(raw, 0, target.Scan0, target.Stride * height);
-                }
-                finally
-                {
-                    resized.UnlockBits(target);
+                    g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.DrawImage(full, new Rectangle(0, 0, width, height));
                 }
 
                 var readBack = resized.LockBits(

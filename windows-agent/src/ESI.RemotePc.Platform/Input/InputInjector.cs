@@ -153,20 +153,41 @@ public sealed class InputInjector(ILogger<InputInjector> log)
 
         var events = new List<INPUT>(8);
 
-        // Modifiers first so the key is seen in context (Ctrl+C, not C then Ctrl).
+        // Resolved once so the press and the release see the same list in the same order.
+        var held = new List<(ushort Vk, bool Extended)>(mods.Count);
         foreach (var mod in mods)
         {
-            if (KeyMap.ToVirtualKey(mod) is not { } modVk)
-                continue;
-            events.Add(Keyboard(modVk, 0, down: true, isExtended: KeyMap.IsExtended(mod), unicode: false));
+            if (KeyMap.ToVirtualKey(mod) is { } modVk)
+                held.Add((modVk, KeyMap.IsExtended(mod)));
         }
 
         var vkValue = (ushort)vk.Value;
         var scan = (ushort)Native.USER32.MapVirtualKeyW(vkValue, WinConst.MAPVK_VK_TO_VSC);
 
-        events.Add(Keyboard(vkValue, scan, down, isExtended, unicode: false));
-        if (!down)
-            events.Add(Keyboard(vkValue, scan, down: false, isExtended, unicode: false));
+        if (down)
+        {
+            // Modifiers first so the key is seen in context (Ctrl+C, not C then Ctrl).
+            foreach (var (modVk, modExtended) in held)
+                events.Add(Keyboard(modVk, 0, down: true, isExtended: modExtended, unicode: false));
+
+            events.Add(Keyboard(vkValue, scan, true, isExtended, unicode: false));
+        }
+        else
+        {
+            // The key first, then the modifiers, in the exact reverse of the press, so the two
+            // halves balance. The press was always sent and the release never was, which left
+            // every modifier held on the machine: one Ctrl+C and the session stayed in Ctrl, so
+            // the next keystroke was a shortcut - Ctrl+W closing the window under you, Ctrl+T
+            // opening a tab - with nothing on the phone able to undo it. Shift stayed down and
+            // typed capitals; Alt stayed down and moved focus to the menu bar.
+            //
+            // The old code had a second defect here as well. `down` is false on this path, so
+            // the first call below already released the key, and the `if (!down)` that
+            // followed released it a second time in the same batch.
+            events.Add(Keyboard(vkValue, scan, false, isExtended, unicode: false));
+            foreach (var (modVk, modExtended) in held)
+                events.Add(Keyboard(modVk, 0, down: false, isExtended: modExtended, unicode: false));
+        }
 
         return Send(events.ToArray());
     }

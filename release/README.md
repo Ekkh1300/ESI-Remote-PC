@@ -7,16 +7,48 @@ Two files. That is the whole delivery.
 | `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
 | `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. |
 
-SHA-256, first 32 hex characters:
+SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  65633B436B46CBCD299B4FD7CF81ECBF36A2498B1BC1533E177D95BCF1703F2C
-ESI-RemotePC-1.0.1.apk             71342743E6762FDC5596F3C3B9F4023E1A84BFBF5EB2C16E7D8CFA2721EE1EED
+ESI-RemotePC-Setup-1.0.1-x64.exe  D3B6AE3F3C9E299CB1F4D103B7768A9310B5F0D07C08FE0C37FDED99DA526D41
+ESI-RemotePC-1.0.1.apk             3C6F9E493606F64AD8A0CF6F8C5EA3D93733C4798B755F9A36ED3A038B91874D
 ```
 
-The APK's hash changes between builds and the installer's does not, because the app changed and
-the agent did not. If you downloaded an earlier copy of the APK it will not match, and that is
-expected; the table above is the current one.
+Both hashes change whenever their side of the project changes, and this build changed both: the
+app got the navigation and file fixes below, and the agent got the capture and input ones. If you
+downloaded an earlier copy of either file it will not match, and that is expected - the block
+above is the current one, and the two files in this directory always agree with it.
+
+## What this build fixes
+
+Four, each measured rather than suspected.
+
+**The rail did not put Control at the bottom.** The rail chose between two layouts using a
+height it computed from a fixed per-button constant before the buttons were measured, and they
+carry a minimum height with text inside. On a window the prediction got wrong, Control either
+fell past the bottom edge or sat directly under Screen. There is no threshold any more: the four
+peers scroll inside an `Expanded` and Control sits outside that region, so it is at the foot on a
+tall window and a short one. A test renders the rail at six heights and four font sizes and
+measures where the box lands.
+
+**Rename and Delete in the Files screen did nothing.** Each menu item popped its own sheet and
+then handed the action *the sheet's* context. The action awaits a confirmation dialog, and by the
+time it returned that context had been unmounted by the pop that started it, so
+`context.mounted` was false and the action returned before sending the request - file still
+there, no message. The screen's context is passed instead, and the builder's parameter is named
+so the two cannot be confused again. Move ran but dropped its result the same way.
+
+**Downscaled screen capture produced a sheared crop, not a smaller picture.** The resize was a
+byte copy sized to the destination, so it never faulted and always reported a good frame - it
+just filled the target with successive chunks of the source's first rows. It also allocated a
+full-resolution buffer per frame, 33 MB at 4K. The resize is now GDI+'s own. This only affects
+displays wider than 2560 pixels; a 1920 display never took this path.
+
+**Keyboard modifiers were pressed and never released.** Every key carried its modifiers down and
+none carried them up, so one Ctrl+C left the machine in Ctrl and the next keystroke became a
+shortcut with nothing on the phone able to undo it. The release half is sent now, in reverse
+order of the press. The app does not send modifiers today, so this was latent - it bites as soon
+ as it does.
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only

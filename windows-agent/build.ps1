@@ -209,7 +209,11 @@ if (-not $SkipPublish) {
 
     Write-Host ''
     Write-Host "  publish directory: $publishDir"
-    Write-Host '  To build the installer:  iscc /DAppVersion=1.0.0 installer\ESI-RemotePC.iss'
+    # No version on the command line. The .iss already defines one, and `/DAppVersion=...`
+    # overrides it - so printing a number here gave two sources of truth for the release
+    # version, and the one in this file went stale while the other did not. Anyone who copied
+    # the printed command got an installer named for the old release.
+    Write-Host '  To build the installer:  iscc installer\ESI-RemotePC.iss'
     Write-Host ''
 
     # The APK is the one artefact a stranger cannot fix for themselves: if it will not install,
