@@ -4,15 +4,19 @@ Two files. That is the whole delivery.
 
 | File | Size | What it is |
 |---|---|---|
-| `ESI-RemotePC-Setup-1.0.1-x64.exe` | 43.8 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.1.apk` | 51.1 MB | The Android app. |
+| `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
+| `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. |
 
 SHA-256, first 32 hex characters:
 
 ```
 ESI-RemotePC-Setup-1.0.1-x64.exe  65633B436B46CBCD299B4FD7CF81ECBF36A2498B1BC1533E177D95BCF1703F2C
-ESI-RemotePC-1.0.1.apk             3EBBDB5DC9AF1F1F6B68365EE3B8D267F7892BFD5A86BCB99902649B480B11CC
+ESI-RemotePC-1.0.1.apk             71342743E6762FDC5596F3C3B9F4023E1A84BFBF5EB2C16E7D8CFA2721EE1EED
 ```
+
+The APK's hash changes between builds and the installer's does not, because the app changed and
+the agent did not. If you downloaded an earlier copy of the APK it will not match, and that is
+expected; the table above is the current one.
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only

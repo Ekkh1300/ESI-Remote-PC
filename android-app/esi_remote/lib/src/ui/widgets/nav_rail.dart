@@ -85,8 +85,8 @@ class EsiNavRail extends StatelessWidget {
 
     // A minimum rather than a fixed height. The label inside is text, and text grows with the
     // user's font-size setting; a fixed box clips it at 2x, which costs the entry its name on
-    // exactly the rail that tells you which PC you are on. The rail as a whole decides whether
-    // there is room, below.
+    // exactly the rail that tells you which PC you are on. Nothing here predicts the result -
+    // the peers simply scroll inside whatever room there is, below.
     Widget button(EsiNavDestination destination) => ConstrainedBox(
           constraints: const BoxConstraints(minHeight: buttonHeight),
           child: _RailButton(
@@ -100,7 +100,6 @@ class EsiNavRail extends StatelessWidget {
 
     final stackedButtons = <Widget>[for (final d in stacked) button(d)];
     final pinnedButtons = <Widget>[for (final d in pinned) button(d)];
-    final chrome = EsiSpace.md + EsiSpace.sm;
 
     return Container(
       width: width,
@@ -114,39 +113,35 @@ class EsiNavRail extends StatelessWidget {
         // Flutter reports as an error, paints as a striped bar, and silently clips whatever
         // entry fell past the bottom. A short window is rare but real: a phone in landscape, a
         // split screen, a freeform window dragged short.
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final needed = stackedButtons.length * buttonHeight +
-                pinnedButtons.length * buttonHeight +
-                chrome;
-            final roomy = pinnedButtons.isEmpty || constraints.maxHeight >= needed;
-
-            if (!roomy) {
-              return SingleChildScrollView(
+        child: Column(
+          children: <Widget>[
+            const SizedBox(height: EsiSpace.md),
+            // The peers scroll; the pinned entry does not, and that is the whole layout.
+            //
+            // This used to be a branch: if the rail was tall enough for every button, use a
+            // Column with a Spacer; otherwise fall back to scrolling the lot. The test that
+            // decided which to use multiplied a fixed buttonHeight by the button count, which is
+            // a prediction made before the buttons are measured - they carry a *min*Height and
+            // their contents are text, so a large font setting makes every one of them taller
+            // than the number that predicted them. Being wrong in one direction ran the roomy
+            // layout on a window that could not hold it and pushed Control past the bottom edge;
+            // being wrong the other way ran the scrollable layout, which had no Spacer at all
+            // and left Control sitting directly under Screen.
+            //
+            // Putting the scroll region inside an Expanded instead makes the outcome
+            // independent of the prediction. There is no threshold to get wrong: the peers take
+            // what room there is and scroll inside it, and the pinned entry follows immediately
+            // after, so it is at the foot of the rail on a 900px window and on a 220px one.
+            Expanded(
+              child: SingleChildScrollView(
                 child: Column(
-                  children: <Widget>[
-                    const SizedBox(height: EsiSpace.md),
-                    ...stackedButtons,
-                    ...pinnedButtons,
-                    const SizedBox(height: EsiSpace.sm),
-                  ],
+                  children: <Widget>[...stackedButtons],
                 ),
-              );
-            }
-
-            return Column(
-              children: <Widget>[
-                const SizedBox(height: EsiSpace.md),
-                ...stackedButtons,
-                // Between the stack and the pinned entry, so the pinned one lands at the foot. A
-                // Spacer placed first would push everything else down instead, which is subtle
-                // enough to look right in a screenshot and wrong in a measurement.
-                if (pinnedButtons.isNotEmpty) const Spacer(),
-                ...pinnedButtons,
-                const SizedBox(height: EsiSpace.sm),
-              ],
-            );
-          },
+              ),
+            ),
+            if (pinnedButtons.isNotEmpty) ...pinnedButtons,
+            const SizedBox(height: EsiSpace.sm),
+          ],
         ),
       ),
     );
