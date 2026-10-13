@@ -2,6 +2,10 @@
 
 Two files. That is the whole delivery.
 
+What changed, and what it looked like before each fix, is in
+[`docs/RELEASE-NOTES-1.0.1.md`](../docs/RELEASE-NOTES-1.0.1.md). This file is what the files
+*are*; that one is what is in them.
+
 | File | Size | What it is |
 |---|---|---|
 | `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |

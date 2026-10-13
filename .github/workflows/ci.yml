@@ -1,0 +1,122 @@
+name: CI
+
+# Both halves of this project, checked on every push.
+#
+# The Windows agent is checked on a Windows runner because every project in it targets
+# net10.0-windows and `EnableWindowsTargeting` only lets that *build* on non-Windows - the
+# tests P/Invoke into USER32, GDI+ and Core Audio and would not run there. The Flutter app
+# runs its tests on Linux, where the runners are faster and cheaper, and builds its APK on a
+# separate job because that one needs the Android SDK and a JDK.
+#
+# Why this exists: the two halves fail in ways the other half cannot see. D51 was a field the
+# Dart side could not put on the wire and the C# side had never been asked for; D52 was an APK
+# that no 32-bit phone could install while `flutter analyze` and `flutter test` were both green,
+# because neither of them opens a package. Nothing here opens a package either - the install
+# check needs Windows and a real signing step - but this at least makes "does it compile and do
+# the tests pass" a thing a stranger can answer without owning the machine.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# A newer push to the same branch makes an older run pointless; let it stop.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-agent:
+    name: Windows agent
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('windows-agent/**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore ESI.RemotePc.Agent.slnx
+        working-directory: windows-agent
+
+      - name: Build
+        run: dotnet build ESI.RemotePc.Agent.slnx -c Release --no-restore -v minimal
+        working-directory: windows-agent
+
+      # Tests rather than only a build, because most of what has gone wrong in this agent was
+      # not a compile error: the walk arithmetic that made the volume slider jump, the framing
+      # header the two sides had to agree on, the scopes that were never granted.
+      - name: Test
+        run: >
+          dotnet test tests/ESI.RemotePc.Tests/ESI.RemotePc.Tests.csproj
+          -c Release --no-build --nologo -v minimal
+        working-directory: windows-agent
+
+  android-app:
+    name: Android app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned, not "latest": the app's own screenshots test loads the SDK's cached copy of
+          # MaterialIcons from a path that moves between releases, so an unpinned runner would
+          # start rendering icons as hollow boxes without anything failing loudly.
+          flutter-version: 3.47.5
+          channel: stable
+          cache: true
+
+      - name: Dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-pub
+
+      - name: Test
+        run: flutter test --no-pub
+
+  android-build:
+    name: Android build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.5
+          channel: stable
+          cache: true
+
+      - name: Dependencies
+        run: flutter pub get
+
+      # A build rather than only tests, because the failure that cost the most in this project
+      # was one only a real package could show. Compiling the release APK catches a missing
+      # asset, a plugin that dropped Android support, or an ABI that Gradle cannot link.
+      - name: Build the release APK
+        run: flutter build apk --release
+        working-directory: android-app/esi_remote
+
+      - name: Record what was built
+        run: |
+          ls -l android-app/esi_remote/build/app/outputs/flutter-apk/app-release.apk
+          sha256sum android-app/esi_remote/build/app/outputs/flutter-apk/app-release.apk

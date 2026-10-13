@@ -382,7 +382,19 @@ class _Masthead extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: EsiSpace.md),
-                const Text('ESI Remote PC', style: EsiType.screenTitle),
+                // Scaled rather than clipped. "ESI Remote PC" at 26px measures about 330px,
+                // and a 360px phone gives this Row 328 - 15 for the rule and the gap, so the
+                // title ran 17px past the right edge on the first screen every user sees.
+                // A fixed smaller size would have cost the wordmark its size on the majority
+                // of phones that fit it; Expanded takes the space that is actually there and
+                // FittedBox shrinks the glyphs only as far as it has to.
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text('ESI Remote PC', style: EsiType.screenTitle),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: EsiSpace.md),
