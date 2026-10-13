@@ -9,13 +9,13 @@ What changed, and what it looked like before each fix, is in
 | File | Size | What it is |
 |---|---|---|
 | `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. |
+| `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
 
 SHA-256:
 
 ```
 ESI-RemotePC-Setup-1.0.1-x64.exe  D3B6AE3F3C9E299CB1F4D103B7768A9310B5F0D07C08FE0C37FDED99DA526D41
-ESI-RemotePC-1.0.1.apk             3C6F9E493606F64AD8A0CF6F8C5EA3D93733C4798B755F9A36ED3A038B91874D
+ESI-RemotePC-1.0.1.apk             C2C8BD8853FF07B849C488A3CC05839AF6C8702005652F850F28F4AD101E6F23
 ```
 
 Both hashes change whenever their side of the project changes, and this build changed both: the
@@ -126,23 +126,34 @@ again. Over ADB it needs no such permission:
 adb install ESI-RemotePC-1.0.1.apk
 ```
 
-It carries `arm64-v8a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
+It carries `arm64-v8a`, `armeabi-v7a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
+The three-ABI list is deliberate: dropping `armeabi-v7a` is what stopped the package
+installing on any 32-bit phone, and it is the reason the D52 section below exists. See that
+section before changing the ABI list.
 
-**Why 51 MB and not 69.9.** A universal APK ships Flutter's engine and the compiled Dart
-twice or three times â€” once per CPU architecture â€” and that was almost the entire package:
-**66.5 MB of the 69.9 MB was `lib/`.** The 32-bit ARM ABI was dropped, taking 18.8 MB with
-it. `x86_64` was kept deliberately even though it only serves emulators and Chromebooks,
+**Why 66.8 MB and not 51.** A universal APK ships Flutter's engine and the compiled Dart
+once per CPU architecture, and that is nearly the whole package. The 32-bit ARM ABI had been
+dropped, taking 18.8 MB with it and making the file 53.6 MB - and making it uninstallable on
+32-bit phones, which was the bug. It is back, the file is 66.8 MB, and that is what the size
+costs. `x86_64` is kept deliberately even though it only serves emulators and Chromebooks,
 because without it the app cannot be installed on an emulator at all, and an artefact nobody
 can install is not one whose behaviour anyone can check.
 
-Removing it took a second step that is worth knowing about if you ever touch this again.
+Keeping 32-bit took a second step that is worth knowing about if you ever touch this again.
 `ndk.abiFilters` does not reach prebuilt `.so` files inside third-party AARs, so ML Kit's copy
-of the barcode model survived the filter while Flutter's own libraries for that ABI did not.
-`aapt` then advertised `armeabi-v7a` support from the leftover file â€” so a 32-bit phone would
-have installed the package and died on launch with an `UnsatisfiedLinkError`. The exclusion
-is a packaging rule over the directory, which is what makes the advertised list true. The
-build is invoked with
-`flutter build apk --release --target-platform android-arm64,android-x64`.
+of the barcode model can survive a filter that removes Flutter's own libraries for that ABI.
+That leaves a half-present ABI: `aapt` advertises it, a 32-bit phone installs the package, and
+it dies on launch with an `UnsatisfiedLinkError`. The exclusion is therefore a packaging rule
+over the directory rather than an ABI filter, and it removes only the one library that cannot
+work:
+
+```kotlin
+excludes += setOf("**/armeabi-v7a/libbarhopper_v3.so")
+```
+
+The build is invoked as `flutter build apk --release`, with no `--target-platform`. Passing
+`--target-platform android-arm64,android-x64` would drop `armeabi-v7a` again and reintroduce
+the install failure this file records as fixed.
 
 **If it refuses to install**, it is one of exactly two things:
 
@@ -935,7 +946,7 @@ library is excluded now and the ABI stays:
 excludes += setOf("**/armeabi-v7a/libbarhopper_v3.so")
 ```
 
-The APK went from 53.6 MB to 70.0 MB. That is the 32-bit build being present, which is what it
+The APK went from 53.6 MB to 66.8 MB. That is the 32-bit build being present, which is what it
 costs and what makes those phones able to install it.
 
 **A second candidate was investigated and dismissed.** The release was signed with v2 only, and
