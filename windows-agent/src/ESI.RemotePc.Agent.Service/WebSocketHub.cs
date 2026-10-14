@@ -216,6 +216,19 @@ public sealed class WebSocketHub
     private string? _activeStreamDevice;
 
     /// <summary>
+    /// The device with PC audio routed to it, if any - the counterpart to
+    /// <see cref="_activeStreamDevice"/> for the loopback stream.
+    /// </summary>
+    /// <remarks>
+    /// Kept separate rather than folded into <see cref="_activeStreamDevice"/> because the two
+    /// are independent decisions. A phone may be told to play the PC's sound while its picture is
+    /// off, and <see cref="OnFrameReceived"/> has to know which kind of frame each device is
+    /// waiting for - forwarding audio to a screen-only phone would push bytes it will drop, and
+    /// forwarding screen to an audio-only one would push megabytes.
+    /// </remarks>
+    private string? _activeAudioDevice;
+
+    /// <summary>
     /// The newest camera frame per phone, for the MJPEG endpoint and the app's preview.
     /// </summary>
     private readonly Esi.Platform.Camera.CameraFrameStore _cameras;
@@ -259,7 +272,17 @@ public sealed class WebSocketHub
     private void OnFrameReceived(object? sender, SessionAgentFrame frame)
     {
         var deviceId = frame.DeviceId;
-        if (deviceId.Length == 0 || _activeStreamDevice != deviceId)
+        if (deviceId.Length == 0)
+            return;
+
+        // Audio frames and screen frames share one SessionChannel event and one forwarding
+        // path, told apart only by the FrameType in the 32-byte header. Routing on that type
+        // rather than forwarding everything to everyone is what keeps an audio-only phone from
+        // receiving megabytes of JPEG it has no decoder for, and a screen-only phone from
+        // receiving fifty µ-law packets a second it would only drop.
+        var isAudio = IsAudioFrame(frame.Data);
+        var wanted = isAudio ? _activeAudioDevice : _activeStreamDevice;
+        if (wanted != deviceId)
             return;
 
         // D46: a stream that is capturing but shows nothing on the phone is indistinguishable
@@ -269,8 +292,8 @@ public sealed class WebSocketHub
         // this is one line per frame, so it is rate-limited to a summary per stream.
         if (_framesForwarded.AddOrUpdate(deviceId, 1, static (_, n) => n + 1) is var count && count % 60 == 1)
         {
-            log.LogInformation("[ws] {Device}: forwarded {Frames} screen frames ({Bytes} bytes in the last one)",
-                deviceId, count, frame.Data.Length);
+            log.LogInformation("[ws] {Device}: forwarded {Frames} {Kind} frames ({Bytes} bytes in the last one)",
+                deviceId, count, isAudio ? "audio" : "screen", frame.Data.Length);
         }
 
         foreach (var connection in _connections.Values)
@@ -379,12 +402,18 @@ public sealed class WebSocketHub
         {
             _connections.TryRemove(key, out _);
             remote.StopStream(device.DeviceId);
+            // Audio is stopped as well as the screen. Without this a phone that walked away
+            // mid-stream would leave the PC's output device open and the loopback thread running
+            // - capturing and encrypting sound for a reader that is no longer there.
+            remote.StopAudio(device.DeviceId);
 
             await _streamGate.WaitAsync().ConfigureAwait(false);
             try
             {
                 if (_activeStreamDevice == device.DeviceId)
                     _activeStreamDevice = null;
+                if (_activeAudioDevice == device.DeviceId)
+                    _activeAudioDevice = null;
             }
             finally
             {
@@ -579,6 +608,14 @@ public sealed class WebSocketHub
                 await HandleRemoteInputAsync(connection, frame).ConfigureAwait(false);
                 break;
 
+            case "audio.start":
+                await HandleAudioStartAsync(connection, frame).ConfigureAwait(false);
+                break;
+
+            case "audio.stop":
+                await HandleAudioStopAsync(connection, frame).ConfigureAwait(false);
+                break;
+
             case "gaming.watch":
                 await SendAsync(connection, WsServerFrame.Of("gaming", frame.Id)).ConfigureAwait(false);
                 break;
@@ -608,6 +645,9 @@ public sealed class WebSocketHub
     public static DeviceScope FrameScope(string frameType) => frameType switch
     {
         "remote.start" or "remote.stop" or "remote.input" or "remote.key" => DeviceScope.Control,
+        // Audio is a control action for the same reason the screen is: it opens an capture
+        // device on the PC and puts what is playing there onto the network.
+        "audio.start" or "audio.stop" => DeviceScope.Control,
         "gaming.watch" or "gaming.set" => DeviceScope.Control,
         "apps.launch" or "apps.terminate" => DeviceScope.Control,
         "media.command" => DeviceScope.Control,
@@ -621,6 +661,25 @@ public sealed class WebSocketHub
         // action for the same reason moving its mouse is - the PC is being driven from elsewhere.
         _ => DeviceScope.Read,
     };
+
+    /// <summary>
+    /// Whether a wire frame is an audio chunk rather than a screen frame.
+    /// </summary>
+    /// <remarks>
+    /// Reads the magic and FrameType straight out of the header rather than trusting a flag
+    /// somewhere, because the forwarding path has only the bytes. The bounds check comes first:
+    /// a frame shorter than the header it claims to carry is not audio, it is malformed, and the
+    /// screen path will drop it for the same reason.
+    /// </remarks>
+    private static bool IsAudioFrame(byte[] data)
+    {
+        if (data.Length < 6)
+            return false;
+
+        // 'E','S','I','V' little-endian, then the FrameType as a ushort at offset 4.
+        return data[0] == (byte)'E' && data[1] == (byte)'S' && data[2] == (byte)'I' && data[3] == (byte)'V'
+            && BitConverter.ToUInt16(data, 4) == 5; // FrameTypes.AudioChunk
+    }
 
     private async Task HandleRemoteStartAsync(HubConnection connection, WsClientFrame frame)
     {
@@ -685,6 +744,73 @@ public sealed class WebSocketHub
             quality = frame.Quality ?? 70,
             detail = started ? null : "The session agent is not connected, so the screen cannot be captured.",
         })).ConfigureAwait(false);
+    }
+
+    private async Task HandleAudioStartAsync(HubConnection connection, WsClientFrame frame)
+    {
+        await _streamGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_activeAudioDevice is not null && _activeAudioDevice != connection.DeviceId)
+            {
+                await SendAsync(connection, new WsServerFrame
+                {
+                    T = "error",
+                    Id = frame.Id,
+                    Code = ErrorCodes.Conflict,
+                    Message = "Another device is already receiving this PC's audio.",
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            _activeAudioDevice = connection.DeviceId;
+        }
+        finally
+        {
+            _streamGate.Release();
+        }
+
+        var started = remote.StartAudio(connection.DeviceId);
+
+        // The reply reports what the agent said about *delivering* the request, not whether the
+        // device opened - the same distinction the session agent makes one hop further along, and
+        // for the same reason. WASAPI opens asynchronously and can refuse afterwards; the honest
+        // confirmation is the phone's meter moving, and the failure is in the agent's log.
+        if (started)
+        {
+            log.LogInformation("PC audio (loopback) started for {Device}", connection.DeviceId);
+        }
+        else
+        {
+            log.LogWarning(
+                "PC audio refused for {Device}: the session agent is not connected, so there is " +
+                "nothing to capture. This is the desktop session agent (the tray icon), not the service.",
+                connection.DeviceId);
+        }
+
+        await SendAsync(connection, WsServerFrame.Of("audio.state", frame.Id, new
+        {
+            active = started,
+            detail = started ? null : "The session agent is not connected, so the PC's audio cannot be captured.",
+        })).ConfigureAwait(false);
+    }
+
+    private async Task HandleAudioStopAsync(HubConnection connection, WsClientFrame frame)
+    {
+        await _streamGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_activeAudioDevice == connection.DeviceId)
+                _activeAudioDevice = null;
+        }
+        finally
+        {
+            _streamGate.Release();
+        }
+
+        remote.StopAudio(connection.DeviceId);
+        await SendAsync(connection, WsServerFrame.Of("audio.state", frame.Id,
+            new { active = false })).ConfigureAwait(false);
     }
 
     private async Task HandleRemoteInputAsync(HubConnection connection, WsClientFrame frame)

@@ -265,6 +265,16 @@ class EsiWebSocket implements EsiWebSocketHandle {
   }
 
   @override
+  void startAudio() {
+    send(EsiWsFrame.audioStart('a${DateTime.now().microsecondsSinceEpoch}'));
+  }
+
+  @override
+  void stopAudio() {
+    send(EsiWsFrame.audioStop('a${DateTime.now().microsecondsSinceEpoch}'));
+  }
+
+  @override
   void sendInput(Map<String, dynamic> input) {
     send(EsiWsFrame.remoteInput(
       'i${DateTime.now().microsecondsSinceEpoch}',
@@ -342,6 +352,12 @@ abstract class EsiWebSocketHandle {
     String? text,
     List<String> mods,
   });
+
+  /// Asks the PC to start streaming its own audio to this phone.
+  void startAudio();
+
+  /// Stops the PC streaming its audio.
+  void stopAudio();
 }
 
 /// Typed convenience wrappers over the raw frame JSON, so screens do not hand-build maps.
@@ -505,6 +521,19 @@ class EsiWsFrame {
   static EsiWsFrame remoteStop(String id) =>
       EsiWsFrame(p: EsiProtocol.version, type: 'remote.stop', id: id);
 
+  /// Asks the agent to open the PC's output device for loopback capture, so the phone can
+  /// play what the PC is playing (PROTOCOL.md §7.2).
+  ///
+  /// Carries no parameters: the PC captures its own default output device, so there is
+  /// nothing to choose. The reply is an `audio.state` frame saying whether the *request*
+  /// was accepted - the device opens asynchronously and can still refuse afterwards.
+  static EsiWsFrame audioStart(String id) =>
+      EsiWsFrame(p: EsiProtocol.version, type: 'audio.start', id: id);
+
+  /// Stops the loopback capture. The counterpart to [audioStart].
+  static EsiWsFrame audioStop(String id) =>
+      EsiWsFrame(p: EsiProtocol.version, type: 'audio.stop', id: id);
+
   /// Asks the agent to push `gaming/state` on the gaming channel at [intervalMs].
   static EsiWsFrame gamingWatch(String id, {int intervalMs = 1000}) => EsiWsFrame(
         p: EsiProtocol.version,
@@ -607,7 +636,25 @@ class ScreenFrameHeader {
   static const int typeTileUpdate = 2;
   static const int typeResyncRequest = 3;
 
+  /// An audio chunk (PROTOCOL.md §7.5). The header's picture-shaped members are reused:
+  /// [screenWidth] is the sample rate, [screenHeight] the channel count, [gridCols] the
+  /// samples per channel, and [payloadLength] the µ-law byte count. No tiles follow.
+  static const int typeAudioChunk = 5;
+
   static const int codecJpeg = 1;
+
+  /// G.711 µ-law, the codec the PC's loopback audio is encoded with. Decoded by
+  /// `lib/src/audio/mu_law.dart`.
+  static const int codecMuLaw = 3;
+
+  /// Whether this header describes audio rather than a picture.
+  ///
+  /// True only when both the frame type *and* the codec agree, because a frame that is
+  /// audio-shaped but not µ-law is malformed rather than a new codec - and one that is
+  /// µ-law but not an audio chunk is a screen frame with a corrupted codec field. Checking
+  /// both means the two failure modes land in the same "drop it" branch instead of one of
+  /// them reaching the audio path with samples that are not samples.
+  bool get isAudio => frameType == typeAudioChunk && codec == codecMuLaw;
 
   factory ScreenFrameHeader.parse(Uint8List bytes) {
     if (bytes.length < size) {
@@ -710,4 +757,48 @@ List<ScreenTile> parseScreenTiles(Uint8List frame) {
     payloadOffset += d.length;
   }
   return tiles;
+}
+
+/// The µ-law payload of one audio chunk, plus the format it was captured at.
+class AudioChunk {
+  const AudioChunk({
+    required this.sampleRate,
+    required this.channels,
+    required this.samplesPerChannel,
+    required this.muLaw,
+  });
+
+  final int sampleRate;
+  final int channels;
+  final int samplesPerChannel;
+
+  /// The raw µ-law bytes, one per sample across all channels. Decode with
+  /// `decodeMuLaw` from `lib/src/audio/mu_law.dart`.
+  final Uint8List muLaw;
+}
+
+/// Extracts the audio payload from a binary frame, or returns null when the frame is not an
+/// audio chunk or is truncated.
+///
+/// Returns null rather than throwing for a frame that merely *looks* broken, because this sits
+/// on the same socket as the screen stream: a malformed packet is dropped here and the screen
+/// path still gets its own chance to parse the frame it may legitimately be waiting for.
+AudioChunk? parseAudioChunk(Uint8List frame) {
+  if (frame.length < ScreenFrameHeader.size) return null;
+  final header = ScreenFrameHeader.parse(frame);
+  if (!header.isAudio) return null;
+
+  // `payloadLength` is what the header declares; the slice is clamped to what actually
+  // arrived, so a short frame yields short audio instead of a range error.
+  final declared = header.payloadLength;
+  final available = frame.length - ScreenFrameHeader.size;
+  final length = declared <= available ? declared : available;
+  if (length <= 0) return null;
+
+  return AudioChunk(
+    sampleRate: header.screenWidth,
+    channels: header.screenHeight,
+    samplesPerChannel: header.gridCols,
+    muLaw: Uint8List.sublistView(frame, ScreenFrameHeader.size, ScreenFrameHeader.size + length),
+  );
 }

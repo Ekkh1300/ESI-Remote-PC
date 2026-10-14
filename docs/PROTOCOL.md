@@ -814,7 +814,17 @@ answered with `error` / `esi_forbidden_scope` and has no effect.
 { "p":1, "t":"remote.input","id":"r3", "input": { "…": "see §7.3" } }
 { "p":1, "t":"remote.key",  "id":"r4", "code":"KeyA", "text":"a", "down":true, "mods":["ctrl"] }
 { "p":1, "t":"gaming.watch","id":"g1", "intervalMs":1000 }
+{ "p":1, "t":"audio.start", "id":"a1" }
+{ "p":1, "t":"audio.stop",  "id":"a2" }
 ```
+
+`audio.start` opens the PC's default output device for loopback capture and streams what is
+playing there back down the same socket, so the phone can be the PC's speaker. It carries no
+parameters: the PC captures its own default device, so there is nothing to choose. Both frames
+require the `control` scope. The reply is an `audio.state` frame (§7.5) whose `active` field
+reports whether the *request* was accepted - the device opens asynchronously and can still
+refuse afterwards, so the honest confirmation is the phone's meter moving, and any later
+failure is in the agent's log.
 
 ### 7.3 Remote input schema
 
@@ -859,16 +869,17 @@ The ticket is single-use, bound to `(deviceId, path, size)`, and expires in 120 
 { "p":1, "t":"gaming", "id":null, "data": { "…": "/gaming/state body" } }
 { "p":1, "t":"remote.state", "id":"r1", "data": { "active":true, "displayId":0,
                                                 "width":2560, "height":1440, "fps":15 } }
+{ "p":1, "t":"audio.state",  "id":"a1", "data": { "active":true, "detail":null } }
 { "p":1, "t":"error", "id":"r3", "code":"esi_forbidden_scope", "message":"…" }
 ```
 
-**Binary frames** (`opcode = 2`) carry the screen stream (§8). The first 32 bytes are a
-fixed header, then the payload:
+**Binary frames** (`opcode = 2`) carry the screen stream (§8) and, when `audio.start` is in
+force, the loopback audio stream. The first 32 bytes are a fixed header, then the payload:
 
 ```
 offset  size  field
 0       4     magic "ESIV" (0x56 53 49 45 little-endian == 'E','S','I','V')
-4       2     frameType (1 = keyframe, 2 = tile update, 3 = tile request/ack)
+4       2     frameType (1 = keyframe, 2 = tile update, 3 = tile request/ack, 5 = audio chunk)
 6       2     displayId
 8       4     frameIndex (monotonic per session)
 12      2     tileCount
@@ -891,6 +902,28 @@ offset  size  field
 
 For `frameType == 3` the payload is just a `frameIndex` + the list of tiles the client
 wants resent (used when a tile packet is lost on a lossy Wi-Fi link).
+
+For `frameType == 5` (audio chunk) the header is the same 32 bytes, but its picture-shaped
+members are reused for the audio format rather than being left as dimensions:
+
+```
+codec (offset 14)      3 = µ-law (G.711)
+screenWidth  (offset 16)   sample rate in Hz (24000)
+screenHeight (offset 20)   channel count (2)
+gridCols     (offset 24)   samples per channel (480)
+gridRows     (offset 26)   unused
+payloadLength(offset 28)   µ-law bytes (= samples per channel x channels)
+tileCount               0, and no descriptor table follows
+```
+
+The payload is `payloadLength` µ-law bytes, one per sample, channels interleaved. 480 samples
+per channel at 24 kHz is 20 ms per packet: fifty packets a second, small enough that a lost one
+is a gap no longer than a blink, large enough that the header is not worth mentioning. The
+struct was not widened to hold real audio fields because it is fixed at 32 bytes and both ends
+read it by offset - moving any field would break the screen stream already deployed.
+
+A frame is an audio chunk only when **both** the frame type and the codec agree. One without
+the other is malformed, not a new codec, and is dropped.
 
 ### 7.6 Keepalive
 

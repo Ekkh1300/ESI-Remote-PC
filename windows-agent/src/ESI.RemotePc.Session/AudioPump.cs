@@ -269,6 +269,11 @@ internal sealed class AudioPump : IDisposable
             }
         }
 
+        // Raise the pending flag *before* the wake. PumpLoop reads it with an exchange that
+        // clears it, so a flag raised after the release could be consumed by a wake that saw the
+        // old value and then left the samples stranded until the next buffer arrived.
+        Interlocked.Exchange(ref _wakePending, 1);
+
         if (_wake.CurrentCount == 0)
         {
             try

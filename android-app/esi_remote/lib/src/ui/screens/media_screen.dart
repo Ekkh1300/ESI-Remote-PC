@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../protocol/models.dart';
 import '../../protocol/protocol_constants.dart';
+import '../../state/audio.dart';
 import '../../state/connection.dart';
 import '../../state/features.dart';
 import '../format.dart';
@@ -45,6 +46,11 @@ class MediaScreen extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: EsiSpace.lg),
                   child: _TransportPanel(slice: slice),
+                ),
+                const SizedBox(height: EsiSpace.md),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: EsiSpace.lg),
+                  child: _SpeakerPanel(),
                 ),
                 const SizedBox(height: EsiSpace.md),
                 Padding(
@@ -180,6 +186,71 @@ class _VolumePanel extends ConsumerWidget {
                 ),
               ],
             ),
+    );
+  }
+}
+
+/// The phone as the PC's speaker: the loopback stream on its own switch.
+///
+/// Deliberately a switch and not a play button. The state it drives is not "playback" but
+/// "should the PC be sending its sound here at all" - the same question the panel above asks
+/// about volume - and a switch says that a whole-machine routing decision is being made, where
+/// a play button would suggest a track is about to start.
+class _SpeakerPanel extends ConsumerWidget {
+  const _SpeakerPanel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(speakerProvider);
+    final notifier = ref.read(speakerProvider.notifier);
+    final live = state == SpeakerState.on || state == SpeakerState.starting;
+
+    return EsiPanel(
+      title: 'This phone as the PC speaker',
+      severity: switch (state) {
+        SpeakerState.on => Severity.nominal,
+        SpeakerState.starting => Severity.unknown,
+        SpeakerState.failed => Severity.elevated,
+        SpeakerState.off => Severity.unknown,
+      },
+      footnote: 'The PC\'s own sound, played here. 24 kHz stereo, so a video on the PC sounds '
+          'like itself rather than like a phone call.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: OutlinedButton.icon(
+                  // Starting is left tappable so a failed attempt can be retried, but the
+                  // button reports what it is doing rather than appearing stuck.
+                  onPressed: state == SpeakerState.starting
+                      ? null
+                      : () => live ? notifier.stop() : notifier.start(),
+                  icon: Icon(
+                    live ? Icons.stop : Icons.speaker_phone,
+                    size: 16,
+                  ),
+                  label: Text(switch (state) {
+                    SpeakerState.on => 'Stop playing here',
+                    SpeakerState.starting => 'Opening…',
+                    SpeakerState.failed => 'Try again',
+                    SpeakerState.off => 'Play the PC here',
+                  }),
+                ),
+              ),
+            ],
+          ),
+          if (state == SpeakerState.failed && notifier.message != null) ...<Widget>[
+            const SizedBox(height: EsiSpace.sm),
+            Text(
+              notifier.message!,
+              style: EsiType.body.copyWith(color: EsiPalette.flare, fontSize: 11),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
