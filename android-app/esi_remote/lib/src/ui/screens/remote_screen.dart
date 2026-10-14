@@ -108,6 +108,7 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
                     onStart: _start,
                     onStop: _stop,
                     onReconnect: _reconnect,
+                    onFullscreen: _openFullscreen,
                   ),
                 ),
                 const SizedBox(height: EsiSpace.md),
@@ -212,6 +213,57 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
   /// is re-read as well - which is what makes the dashboard catch up too, not just the socket.
   void _reconnect() {
     ref.read(connectionProvider.notifier).refresh();
+  }
+
+  /// Hands the whole phone to the remote desktop.
+  ///
+  /// In the panel it is one column of five: on a 360-wide phone the stream gets a strip about
+  /// a hundred pixels tall with the rest of the screen given over to chrome nobody is looking
+  /// at. Nothing on a remote desktop is readable at that size, so "show it full screen" is not
+  /// a convenience here - it is the difference between reading the PC and squinting at it.
+  ///
+  /// Both halves of the chrome go. The bars at the top and bottom of the phone are hidden
+  /// rather than made transparent, because a transparent bar still covers the top of the
+  /// desktop; and the phone is turned to match a desktop that is landscape, because a 16:9
+  /// picture on an upright phone is a band with black above and below it, which is not the
+  /// full screen that was asked for.
+  Future<void> _openFullscreen() async {
+    final surface = _surface;
+    final orientations = surface.width > 0 && surface.width > surface.height
+        ? const <DeviceOrientation>[
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]
+        // Both landscape at once rather than a specific one: which way the phone is turned
+        // is a fact about the hand holding it, not about the desktop, so the system picks.
+        : DeviceOrientation.values;
+
+    await SystemChrome.setPreferredOrientations(orientations);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
+    try {
+      if (mounted) {
+        await Navigator.of(context, rootNavigator: true).push<void>(
+          PageRouteBuilder<void>(
+            opaque: true,
+            // No transition either way. This is the same picture at a different size, and a
+            // slide between the two reads as if a different screen had opened.
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            pageBuilder: (context, _, _) => EsiFullscreenStream(
+              surface: surface,
+              inputEnabled: _inputEnabled,
+            ),
+          ),
+        );
+      }
+    } finally {
+      // Always undone, whichever way the route was left - the system back gesture pops it
+      // through here just the same - because what is left behind otherwise is a phone still
+      // turned on its side and still missing its status bar, on every other screen.
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
   }
 }
 
@@ -391,6 +443,7 @@ class _StreamPanel extends ConsumerWidget {
     required this.onStart,
     required this.onStop,
     required this.onReconnect,
+    required this.onFullscreen,
   });
 
   final ScreenSurface surface;
@@ -401,6 +454,7 @@ class _StreamPanel extends ConsumerWidget {
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onReconnect;
+  final VoidCallback onFullscreen;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -408,6 +462,19 @@ class _StreamPanel extends ConsumerWidget {
     return EsiPanel(
       title: 'Stream',
       severity: streaming ? Severity.nominal : Severity.unknown,
+      // On the panel header rather than floating over the picture.
+      //
+      // A corner button sitting on the stream is the video-player convention and it is the
+      // right one for a video, but every pixel of this picture is somewhere on the remote
+      // desktop: a button over it would be a region of the PC the person can no longer click.
+      // The header costs one tap and takes nothing away from the desktop.
+      trailing: EsiIconAction(
+        icon: Icons.fullscreen,
+        tooltip: streaming
+            ? 'Show the remote desktop full screen'
+            : 'Nothing to enlarge: start the stream first',
+        onPressed: streaming ? onFullscreen : null,
+      ),
       footnote: streaming
           ? 'frame ${surface.frameIndex} · ${surface.width}×${surface.height} · '
               '${surface.tileCount}/${surface.expectedTiles} tiles'
@@ -673,6 +740,141 @@ class _ImagePainter extends CustomPainter {
   @override
   bool shouldRepaint(_ImagePainter oldDelegate) =>
       oldDelegate.surface.frameIndex != surface.frameIndex;
+}
+
+/// The stream on its own, over the whole phone.
+///
+/// This is the same `_InputSurface` the panel uses, without the panel around it: the reason
+/// the control exists is that a phone-sized column of chrome around a picture leaves the
+/// picture about a hundred pixels tall, and a desktop read at a hundred pixels tall is not a
+/// desktop anybody can use. Nothing about the picture or the input changes here - the same
+/// normalised coordinates go to the same agent - only how much room it is given.
+///
+/// The one thing that stays is the exit. It has to be over the desktop, because every pixel
+/// of this view *is* the desktop, so it is kept to a single corner and the informational
+/// half of the bar is skipped during hit testing: the strip at the top of the screen is
+/// still somewhere on the remote PC, and a readout nobody taps would quietly take a click
+/// meant for it.
+class EsiFullscreenStream extends ConsumerWidget {
+  const EsiFullscreenStream({super.key, required this.surface, required this.inputEnabled});
+
+  final ScreenSurface surface;
+  final bool inputEnabled;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(remoteStatusProvider).value ?? unknownRemoteStatus;
+    final socket = ref.watch(webSocketProvider);
+    final live = socket?.isLive ?? false;
+    final actions = ref.read(remoteInputActionsProvider);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: Center(
+              child: _InputSurface(
+                surface: surface,
+                // Not `streaming`: whatever made the button available in the panel is
+                // captured, so the only thing that can change under it while the phone is
+                // sideways is the flag the switch itself owns.
+                enabled: inputEnabled && surface.hasContent,
+                onTapAt: (x, y) => actions.move(x, y),
+                onButton: (button, down, x, y) => actions.button(button, down, x, y),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(EsiSpace.sm),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Expanded(
+                    child: IgnorePointer(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _FullscreenNotice(
+                          text: _notice(status.available, live),
+                          warning: !status.available || !live,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: EsiSpace.sm),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      borderRadius: EsiRadius.tag,
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+                    ),
+                    child: IconButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Leave full screen',
+                      icon: const Icon(Icons.fullscreen_exit, size: 19, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// What the corner says, in the order that makes the most alarming thing first.
+  ///
+  /// Full screen is a mode people sit in, so the two states where the picture is a lie - the
+  /// session helper went away, or the socket did - are named rather than left as a still
+  /// frame the person will keep poking at.
+  String _notice(bool available, bool live) {
+    if (!available) return 'Session helper is not connected';
+    if (!live) return 'No connection to the PC';
+    if (!surface.hasContent) return 'Waiting for the first frame';
+    return '';
+  }
+}
+
+/// The one line of text in the corner of full screen, on a scrim so it survives whatever the
+/// remote desktop happens to be showing behind it.
+class _FullscreenNotice extends StatelessWidget {
+  const _FullscreenNotice({required this.text, required this.warning});
+
+  final String text;
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.isEmpty) return const SizedBox.shrink();
+    final colour = warning ? EsiPalette.alarm : EsiPalette.dim;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: EsiSpace.sm + 1, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.6),
+        borderRadius: EsiRadius.tag,
+        border: Border.all(color: colour.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(warning ? Icons.error_outline : Icons.desktop_windows_outlined,
+              size: 13, color: colour),
+          const SizedBox(width: EsiSpace.sm - 1),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: EsiType.label.copyWith(color: EsiPalette.ink, fontSize: 10),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SettingsPanel extends StatelessWidget {

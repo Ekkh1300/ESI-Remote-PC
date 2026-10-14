@@ -139,6 +139,18 @@ public sealed class RunningAppListResponse
     [JsonPropertyName("processes")] public List<RunningAppDto> Processes { get; set; } = [];
 }
 
+/// `GET /system/processes`.
+///
+/// A list under a key rather than the bare array this endpoint used to send. The app reads
+/// `processes` from the body - exactly as it does from `/apps/running`, which has always
+/// been wrapped - and a bare array is not an object, so the reader answered with an empty
+/// one: every process on the machine arrived and the screen reported that the agent had
+/// returned no processes at all.
+public sealed class ProcessListResponse
+{
+    [JsonPropertyName("processes")] public List<ProcessInfoDto> Processes { get; set; } = [];
+}
+
 public sealed class TerminateResponse
 {
     [JsonPropertyName("terminated")] public int Terminated { get; set; }

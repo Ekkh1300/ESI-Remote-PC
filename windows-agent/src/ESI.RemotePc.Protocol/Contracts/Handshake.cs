@@ -128,6 +128,18 @@ public sealed class PairedDeviceDto
     [JsonPropertyName("suspended")] public bool Suspended { get; set; }
 }
 
+/// `GET /devices`.
+///
+/// A list under a key rather than a bare array, which is what this endpoint used to send.
+/// `GET` on this app reads `devices` out of the body - as it does for `/apps/running`,
+/// `/files/roots`, `/audit` and `/logs`, which have always been wrapped - and a bare array
+/// reached the JSON reader as something that is not an object, so it was quietly read as an
+/// empty one. The settings screen then said no PC was paired while every PC was.
+public sealed class DeviceListResponse
+{
+    [JsonPropertyName("devices")] public List<PairedDeviceDto> Devices { get; set; } = [];
+}
+
 public sealed class RotateRequest
 {
     [JsonPropertyName("confirmDeviceId")] public string ConfirmDeviceId { get; set; } = "";

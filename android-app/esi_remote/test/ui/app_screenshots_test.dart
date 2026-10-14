@@ -54,8 +54,8 @@ Future<void> _loadFonts() async {
 ///
 /// It is not a test of pixel equality. Nothing is compared against a stored image, so a
 /// deliberate redesign does not fail here; what it produces is the PNG under
-/// `test/goldens/`, which is what gets looked at when someone asks whether the rail puts
-/// Control at the foot.
+/// `test/goldens/`, which is what gets looked at when someone asks whether the bar puts
+/// Control last, or how much of the phone the screen gets.
 void main() {
   // The emulator's own numbers: a 1080x2400 panel at 3x density is 360x800 logical pixels.
   const logicalWidth = 360.0;
@@ -111,7 +111,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  testWidgets('dashboard renders with Control at the foot of the rail', (tester) async {
+  testWidgets('dashboard renders with Control as the last slot of the bar', (tester) async {
     await pumpApp(tester, location: '/dashboard');
 
     expect(tester.takeException(), isNull, reason: 'the dashboard screen threw');
@@ -122,7 +122,9 @@ void main() {
       find.ancestor(of: find.text('Control'), matching: find.byType(InkWell)),
     );
     expect(control.bottom, greaterThanOrEqualTo(logicalHeight - 12),
-        reason: 'Control sits ${logicalHeight - control.bottom}px above the foot of the rail');
+        reason: 'Control sits ${logicalHeight - control.bottom}px above the foot of the bar');
+    expect(control.center.dx, greaterThan(logicalWidth / 2),
+        reason: 'Control is not the last slot of the bar');
 
     await expectLater(
       find.byType(AppShell),

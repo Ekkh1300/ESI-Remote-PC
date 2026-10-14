@@ -12,15 +12,17 @@ import '../state/metrics.dart';
 import 'format.dart';
 import 'theme.dart';
 import 'widgets/load_trace.dart';
-import 'widgets/nav_rail.dart';
+import 'widgets/nav_bar.dart';
 import 'widgets/panel.dart';
 import 'widgets/states.dart';
 
-/// The navigation shell: a left rail plus a persistent status spine.
+/// The navigation shell: a persistent status spine across the top and a navigation bar
+/// across the foot.
 ///
-/// The rail rather than a bottom bar, because this is a control surface for a machine, not
-/// a phone-first consumer app: the destinations are peers of each other, and a vertical
-/// rail leaves the full width for the readouts, which are the thing that matters.
+/// The destinations are peers of each other and the content between the two is the point,
+/// so both pieces of chrome hug the horizontal edges and the whole width belongs to the
+/// readouts. The bar used to be a rail down the left, which cost that width on every screen
+/// to buy back nothing that a bar across the bottom does not already give.
 class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.navigationShell});
 
@@ -51,7 +53,6 @@ class AppShell extends ConsumerWidget {
       label: 'Control',
       icon: Icons.tune_outlined,
       selectedIcon: Icons.tune,
-      pinnedToBottom: true,
     ),
   ];
 
@@ -67,25 +68,18 @@ class AppShell extends ConsumerWidget {
       body: Column(
         children: <Widget>[
           StatusSpine(connection: connection),
-          Expanded(
-            child: Row(
-              children: <Widget>[
-                EsiNavRail(
-                  destinations: destinations,
-                  currentIndex: navigationShell.currentIndex,
-                  unread: unread,
-                  online: connection.isOnline,
-                  showUnreadOn: badgeDestination,
-                  onSelect: (index) => navigationShell.goBranch(
-                    index,
-                    // Tapping the current tab pops it back to its root, which is what a
-                    // person expects from a tab they are already on.
-                    initialLocation: index == navigationShell.currentIndex,
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(child: navigationShell),
-              ],
+          Expanded(child: navigationShell),
+          EsiBottomBar(
+            destinations: destinations,
+            currentIndex: navigationShell.currentIndex,
+            unread: unread,
+            online: connection.isOnline,
+            showUnreadOn: badgeDestination,
+            onSelect: (index) => navigationShell.goBranch(
+              index,
+              // Tapping the current tab pops it back to its root, which is what a
+              // person expects from a tab they are already on.
+              initialLocation: index == navigationShell.currentIndex,
             ),
           ),
         ],
@@ -238,8 +232,13 @@ class EsiPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: EsiPalette.void_,
       floatingActionButton: floating,
+      // `bottom: false` because the shell's navigation bar below owns the bottom inset. With
+      // both applying it, every screen would end in a band of padding exactly the height of
+      // the gesture bar, sitting *above* the bar and holding nothing - and the content would
+      // stop short of the thing it is supposed to be resting on.
       body: SafeArea(
         top: false,
+        bottom: false,
         child: onRefresh == null
             ? SingleChildScrollView(
                 padding: const EdgeInsets.only(right: EsiSpace.lg),

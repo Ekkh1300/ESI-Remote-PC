@@ -236,6 +236,69 @@ void main() {
       ]);
       expect(description, 'CPU 42%, GPU 5%');
     });
+
+    testWidgets('says so when every channel has only the one reading', (tester) async {
+      // The gap this closes. The grid and the legend are painted either way, so a plot holding
+      // a single sample looks identical to a plot that is failing - a frame, three labels, and
+      // nothing in between - and "the graph does not show" is the only thing the user can say
+      // about either. One sample draws a dot and no line, so the panel says so.
+      await tester.pumpWidget(_host(
+        const SizedBox(
+          height: 120,
+          child: EsiLoadTrace(
+            channels: <TraceChannel>[
+              TraceChannel(label: 'CPU', series: <double>[42], colour: EsiPalette.signal),
+              TraceChannel(label: 'GPU', series: <double>[17], colour: EsiPalette.flare),
+              TraceChannel(label: 'RAM', series: <double>[63], colour: EsiPalette.lock),
+            ],
+          ),
+        ),
+      ));
+      expect(find.text('Taking the first readings'), findsOneWidget);
+      expect(find.text('No load data yet'), findsNothing);
+    });
+
+    testWidgets('says nothing once a line can be drawn', (tester) async {
+      // One channel with two readings is enough; the other two catching up is not the
+      // dashboard's problem to announce.
+      await tester.pumpWidget(_host(
+        const SizedBox(
+          height: 120,
+          child: EsiLoadTrace(
+            channels: <TraceChannel>[
+              TraceChannel(label: 'CPU', series: <double>[42, 51], colour: EsiPalette.signal),
+              TraceChannel(label: 'GPU', series: <double>[17], colour: EsiPalette.flare),
+            ],
+          ),
+        ),
+      ));
+      expect(find.text('Taking the first readings'), findsNothing);
+      expect(find.text('No load data yet'), findsNothing);
+    });
+
+    test('a reading it could not take is not a reading', () {
+      // The painter skips NaN instead of bridging it, so two samples where one of them is
+      // NaN is still one sample, and claiming otherwise would promise a line that is not there.
+      expect(
+        traceState(<TraceChannel>[
+          TraceChannel(label: 'CPU', series: <double>[double.nan, double.nan], colour: EsiPalette.signal),
+        ]),
+        TraceState.empty,
+      );
+      expect(
+        traceState(<TraceChannel>[
+          TraceChannel(label: 'CPU', series: <double>[10, double.nan, 30], colour: EsiPalette.signal),
+        ]),
+        TraceState.ready,
+      );
+      expect(
+        traceState(<TraceChannel>[
+          TraceChannel(label: 'CPU', series: <double>[10], colour: EsiPalette.signal),
+        ]),
+        TraceState.thin,
+      );
+      expect(traceState(const <TraceChannel>[]), TraceState.empty);
+    });
   });
 
   group('EsiConfirmDialog', () {

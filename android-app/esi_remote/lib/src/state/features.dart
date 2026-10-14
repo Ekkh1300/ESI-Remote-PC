@@ -142,7 +142,7 @@ final appCatalogProvider = FutureProvider<AppCatalog>((ref) async {
     final json = await api.getJson('/apps');
     return AppCatalog.fromJson(json);
   });
-  return slice.value ?? const AppCatalog(apps: [], categories: []);
+  return valueOrThrow(slice, const AppCatalog(apps: [], categories: []));
 });
 
 final runningAppsProvider = FutureProvider<List<RunningApp>>((ref) async {
@@ -154,7 +154,7 @@ final runningAppsProvider = FutureProvider<List<RunningApp>>((ref) async {
         ? (json['processes'] as List).map((e) => RunningApp.fromJson(_obj(e))).toList()
         : <RunningApp>[];
   });
-  return slice.value ?? const <RunningApp>[];
+  return valueOrThrow(slice, const <RunningApp>[]);
 });
 
 class AppActions {
@@ -555,7 +555,7 @@ final pairedDevicesProvider = FutureProvider<List<PairedDevice>>((ref) async {
         ? (json['devices'] as List).map((e) => PairedDevice.fromJson(_obj(e))).toList()
         : <PairedDevice>[];
   });
-  return slice.value ?? const <PairedDevice>[];
+  return valueOrThrow(slice, const <PairedDevice>[]);
 });
 
 final auditTrailProvider = FutureProvider<AuditTrail>((ref) async {

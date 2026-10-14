@@ -433,7 +433,7 @@ final processesProvider = FutureProvider<List<ProcessInfo>>((ref) async {
             .toList()
         : <ProcessInfo>[];
   });
-  return slice.value ?? const <ProcessInfo>[];
+  return valueOrThrow(slice, const <ProcessInfo>[]);
 });
 
 /// A tiny local helper so the process list does not need to import the JSON readers.

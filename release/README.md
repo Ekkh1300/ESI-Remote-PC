@@ -9,13 +9,13 @@ What changed, and what it looked like before each fix, is in
 | File | Size | What it is |
 |---|---|---|
 | `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.1.apk` | 66.9 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
+| `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
 
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  2877A17F3471F41C048BDC237C7A9D1BDE59B9C172E4EBC86AE27954FCC1DB09
-ESI-RemotePC-1.0.1.apk             F60C39EBB20123C6B4A82ACDF11E4A30680DAD3E31882BFB1528174247F4E467
+ESI-RemotePC-Setup-1.0.1-x64.exe  0BDE74B04187C7ED84F81EF27EC7EFC50433EF768D4D3289F1D77398D2FE811E
+ESI-RemotePC-1.0.1.apk             641888AC805CB165CBFFD0B57AA60BA66AAF2182B9BC9472659DC16CF35C1C5A
 ```
 
 Both hashes change whenever their side of the project changes, and this build changed both: the
@@ -25,15 +25,48 @@ above is the current one, and the two files in this directory always agree with 
 
 ## What this build fixes
 
-Four, each measured rather than suspected.
+Seven, each measured rather than suspected.
 
-**The rail did not put Control at the bottom.** The rail chose between two layouts using a
-height it computed from a fixed per-button constant before the buttons were measured, and they
-carry a minimum height with text inside. On a window the prediction got wrong, Control either
-fell past the bottom edge or sat directly under Screen. There is no threshold any more: the four
-peers scroll inside an `Expanded` and Control sits outside that region, so it is at the foot on a
-tall window and a short one. A test renders the rail at six heights and four font sizes and
-measures where the box lands.
+**The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
+five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
+logical pixels on a 360-wide phone, a fifth of the reading area, on the tab whose job is the
+readings - and it sat on the left edge, which is the part of a held phone a thumb has to travel
+to. The destinations are now five equal slots across the bottom, where the hand already is, and
+every screen gets its full width back. Control used to be pinned to the foot of the rail, which
+bought it a statement about "the other thing" in exchange for a large dead gap between it and its
+four peers; in a horizontal bar the peers are contiguous by construction, so Control simply sits
+last and the gap costs nothing. A test measures the bar itself - not a reconstruction of it - at
+six window heights and four font sizes.
+
+**The screen could not be shown full screen.** On a phone the stream was one column of five
+inside a panel, about a hundred pixels tall, with the rest of the display given to chrome nobody
+was looking at. Nothing on a remote desktop is readable at that size. There is now a control on
+the Stream panel that hands the whole phone to the desktop: the system bars are hidden rather
+than made transparent, because a transparent bar still covers the top of the picture, and the
+phone turns to match a landscape desktop. Whatever leaves the mode - the button, the back
+gesture, the back button - the phone is handed back. The one row of controls that has to sit
+over the picture is skipped during hit testing, because every pixel of that view is a pixel of
+the PC; a test lays the view out in landscape, where the bar genuinely overlaps the desktop, and
+checks which widget answers the tap.
+
+**The Apps screen said no processes were running, on a machine running hundreds.** The agent
+answered `/system/processes` and `/devices` with a bare JSON array. The app reads
+`json['processes']`, and the helper it uses to read an object returns an *empty* object rather
+than an error when it is handed an array - so the request never failed, it simply always
+produced an empty list. The agent now wraps both responses the way every other one already was,
+and the app-side helper refuses a JSON array instead of quietly pretending it was `{}`. The four
+screens that read those lists also swallowed the failure: a request that failed came back as an
+empty list, which is the same picture as a machine with nothing to report. They now say what
+happened.
+
+**The usage graph was there, and said nothing about why it was blank.** The Load panel's trace
+always paints its grid and its CPU/GPU/RAM legend, so a trace holding no samples looks exactly
+like a trace whose lines are missing - a frame, three labels, and nothing between them. It now
+says which one it is: "No load data yet" when nothing has arrived, and "Taking the first
+readings" when only one has, which is the state a person actually meets in the second after
+connecting and the one that most looks like a broken graph. The chain that draws it - the PC's
+own history, the snapshot that carries it, the window the phone accumulates, the three channels
+and the painter that needs two points - had no tests at all.
 
 **Rename and Delete in the Files screen did nothing.** Each menu item popped its own sheet and
 then handed the action *the sheet's* context. The action awaits a confirmation dialog, and by the

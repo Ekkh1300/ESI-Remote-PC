@@ -598,7 +598,10 @@ public static class Endpoints
                 _ => processes.OrderByDescending(p => p.WorkingSetBytes).ToList(),
             };
 
-            return Results.Ok(processes.Take(Math.Clamp(limit ?? 50, 1, 200)));
+            return Results.Ok(new ProcessListResponse
+            {
+                Processes = processes.Take(Math.Clamp(limit ?? 50, 1, 200)).ToList(),
+            });
         });
 
         api.MapPost("/system/process/{pid:int}/terminate", async (int pid, [FromServices] PowerService power) =>
@@ -1343,7 +1346,10 @@ public static class Endpoints
 
         // ---- Devices -----------------------------------------------------------
         api.MapGet("/devices", ([FromServices] DeviceStore store) =>
-            Results.Ok(store.List().Select(ToDto)));
+            Results.Ok(new DeviceListResponse
+            {
+                Devices = store.List().Select(ToDto).ToList(),
+            }));
 
         api.MapPost("/auth/rotate", async (HttpContext context, RotateRequest request,
             [FromServices] PairingManager pairing, [FromServices] RequestVerifier verifier, [FromServices] SettingsStore settings, [FromServices] AuditLog audit) =>

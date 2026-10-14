@@ -440,8 +440,9 @@ class EsiApi {
 
   static Map<String, dynamic> _decodeObject(http.Response response) {
     if (response.bodyBytes.isEmpty) return <String, dynamic>{};
+    final Object? decoded;
     try {
-      return asObject(jsonDecode(utf8.decode(response.bodyBytes)));
+      decoded = jsonDecode(utf8.decode(response.bodyBytes));
     } on FormatException catch (e) {
       throw EsiApiException(
         statusCode: response.statusCode,
@@ -450,6 +451,28 @@ class EsiApi {
         cause: e,
       );
     }
+
+    if (decoded is Map) return asObject(decoded);
+
+    // A JSON list is not a malformed object, so it must not be read as an empty one.
+    //
+    // `asObject` answers `{}` for anything that is not a map, which is right for the
+    // discovery path and wrong here: the promise of `getJson` is that the body *is* an
+    // object, and silently keeping the promise by returning nothing is what let
+    // `GET /system/processes` report "the agent returned an empty list" while the agent
+    // returned every process on the machine. A shape the app does not recognise is a
+    // version mismatch, and §10 says those degrade by saying so.
+    if (decoded is List) {
+      throw EsiApiException(
+        statusCode: response.statusCode,
+        code: EsiProtocol.errUnsupported,
+        message: 'The agent answered this request with a JSON list where this app expects '
+            'an object, so the response cannot be read. The agent on the PC is a different '
+            'version from this app.',
+      );
+    }
+
+    return <String, dynamic>{};
   }
 }
 

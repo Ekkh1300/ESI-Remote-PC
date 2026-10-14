@@ -109,16 +109,66 @@ encoder's own constants, and by building the native player into the APK — but 
 to it. The emulator on the machine that built this will not boot, so the end-to-end path has
 not been heard on a real device. That is why this is a prerelease rather than the 1.0.1 tag.
 
+**The screen could not be shown full screen.** On a phone the stream was one column of five
+inside a panel — about a hundred pixels tall, with the rest of the display given over to chrome
+nobody was looking at. Nothing on a remote desktop is readable at that size, so reading a PC
+from a phone was not really possible; the picture was there, and it was a fifth of the screen.
+There is now a control on the Stream panel that hands the whole phone to the desktop: the bars
+at the top and bottom are hidden rather than made transparent, because a transparent bar still
+covers the top of the picture, and the phone turns to match a desktop that is landscape — a
+16:9 picture on an upright phone is a band with black above and below it, which is not the full
+screen that was asked for. Whatever leaves the mode — the button, the back gesture, the back
+button — the phone is handed back: orientation restored, bars restored.
+
+The one row of controls that has to sit over the picture is skipped during hit testing, because
+every pixel of that view is a pixel of the PC, and a status line quietly taking the first click
+of every session is worse than no status line. A test lays the view out in landscape, where the
+bar genuinely overlaps the desktop, and checks which widget answers the tap. *(D64)*
+
+## Running applications
+
+**The Apps screen said no processes were running, on a machine running hundreds.** The agent
+answered `/system/processes` and `/devices` with a bare JSON array. The app reads
+`json['processes']` — and the helper it uses to read an object returns an *empty* object rather
+than an error when it is handed an array, so the request never failed, it simply always
+produced an empty list, and the screen said so. The agent now wraps both responses the way
+every other one already was, and the app-side helper refuses a JSON array instead of quietly
+pretending it was `{}`.
+
+The four screens that read those lists also swallowed the failure: a request that failed came
+back as an empty list, which is the same picture as a machine with nothing to report. They now
+say what happened. *(D65)*
+
+## The dashboard's usage graph
+
+**The graph was there, and said nothing about why it was blank.** The Load panel's trace always
+paints its grid and its CPU/GPU/RAM legend, so a trace holding no samples looks exactly like a
+trace whose lines are missing — a frame, three labels, and nothing between them. It now says
+which one it is: "No load data yet" when nothing has arrived, and "Taking the first readings"
+when only one has, which is the state a person actually meets in the second after connecting
+and the one that most looks like a broken graph.
+
+The chain that draws it — the PC's own history, the snapshot that carries it, the window the
+phone accumulates, the three channels and the painter that needs two points — had no tests at
+all. Every link was individually correct and the order they run in had never been measured.
+*(D66)*
+
 ## Navigation
 
-**Control did not sit at the foot of the left rail.** The rail chose between two layouts from
-a height it predicted before the buttons were measured, and the buttons carry a *minimum*
-height with text inside. When the prediction was wrong in one direction Control was pushed
-past the bottom edge; in the other the fallback layout had no gap at all and left it sitting
-directly under Screen. The threshold is gone: the four peers scroll inside an `Expanded` and
-Control sits outside that region, so it is at the foot of a tall window and a short one alike.
-A test renders the rail at six heights and four font sizes and measures where the box lands.
-*(D59, D55)*
+**The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
+five labels their vertical room by giving up a strip of the phone's width on *every* screen —
+74 logical pixels on a 360-wide phone, a fifth of the reading area, on the tab whose job is the
+readings — and it sat on the left edge, which is the part of the phone a thumb has to travel to.
+The destinations are now five equal slots across the bottom, where the hand already is, and
+every screen gets its full width back.
+
+Control used to be pinned to the foot of the rail, which bought it a statement about "the other
+thing" in exchange for a large dead gap between it and its four peers. In a horizontal bar the
+peers are contiguous by construction, so Control simply sits last and the gap costs nothing.
+
+A test measures the bar itself — not a reconstruction of it — at six window heights and four
+font sizes: five destinations on one row, contiguous, in order, and labelled; and the area
+above it spanning the full width of a 360-pixel phone. *(D59, D55, D67)*
 
 **The wordmark ran off the right edge on the first screen.** "ESI Remote PC" at 26px measures
 about 330px, and a 360px phone gave the row 328. The title now takes the space that is
@@ -146,7 +196,7 @@ regression.
 
 ## Verification
 
-- 299 C# tests, 285 Dart tests, all passing
+- 299 C# tests, 291 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
@@ -155,6 +205,10 @@ regression.
   and release-APK build on every push — see `.github/workflows/ci.yml`
 - The audio wire format is pinned to the PC encoder's constants by `test/audio/audio_wire_test.dart`,
   and the native player is confirmed present in the built APK's dex
+- The usage graph's whole path — PC history, snapshot, accumulated window, three channels,
+  painter — is measured end to end by `test/state/metrics_history_test.dart`
+- Full screen is measured by `test/ui/fullscreen_test.dart`, including which widget answers a
+  tap that lands on the status bar
 
 Both files, their sizes and their SHA-256 hashes are in `release/README.md`, which is the
 authoritative record of what is in this delivery.

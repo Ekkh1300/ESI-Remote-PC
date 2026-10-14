@@ -438,3 +438,35 @@ Future<AsyncSlice<T>> runSlice<T>(Future<T> Function() call) async {
     return AsyncSlice<T>(error: e.failure.reason, errorDetail: e.failure.presented);
   }
 }
+
+/// A load that failed, carried as something whose `toString()` is the sentence itself.
+///
+/// Used where the failure has to be *thrown* rather than rendered from a slice, so the
+/// screen does not end up printing a type name in front of the reason.
+class EsiLoadException implements Exception {
+  const EsiLoadException(this.message, {this.detail});
+
+  final String message;
+  final String? detail;
+
+  @override
+  String toString() => detail == null ? message : '$message $detail';
+}
+
+/// The value in [slice], or its failure re-thrown.
+///
+/// [runSlice] folds a protocol failure into a message so a screen can render it where it
+/// stands. A `FutureProvider` wants the other shape - `AsyncValue.error`, which it reaches
+/// only when its future fails. Returning `slice.value ?? fallback` instead, which is what
+/// these screens used to do, hands them an empty list, and they then report that the PC said
+/// there was nothing to show. The PC never said that: it was never reached, or it answered
+/// in a shape this app could not read. "No processes" and "cannot read the process list" look
+/// identical from the tab otherwise, and only one of them is fixed by pressing refresh.
+///
+/// [fallback] covers the case of neither: no value and no failure, which is the provider's
+/// own answer to "nothing is selected" rather than anything the agent said.
+T valueOrThrow<T>(AsyncSlice<T> slice, T fallback) {
+  final error = slice.error;
+  if (error != null) throw EsiLoadException(error, detail: slice.errorDetail);
+  return slice.value ?? fallback;
+}

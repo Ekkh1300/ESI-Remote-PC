@@ -32,6 +32,40 @@ class TraceChannel {
 /// Gaps are drawn as gaps. If a reading stops arriving, the trace breaks rather than
 /// interpolating across the hole, because a straight line between two samples would be a
 /// claim about data that does not exist.
+/// How much there is to draw.
+///
+/// The grid and the legend are always painted, so a plot with no readings at all looks exactly
+/// like a plot whose lines are merely hiding: a frame, three labels, and nothing between them.
+/// That is what "the usage graph does not show" looks like from the phone, and the only thing
+/// that separates the two cases - nothing has arrived yet, versus everything has arrived and is
+/// being drawn - is saying which one it is.
+enum TraceState {
+  /// Not one reading in any channel.
+  empty,
+
+  /// Readings exist, but fewer than two in every channel: a dot on the right and no line yet.
+  thin,
+
+  /// At least one channel can be drawn as a line.
+  ready,
+}
+
+/// Classifies [channels] for [EsiLoadTrace] to explain itself with.
+TraceState traceState(List<TraceChannel> channels) {
+  var anySample = false;
+  for (final channel in channels) {
+    var count = 0;
+    for (final value in channel.series) {
+      // The painter skips NaN rather than bridging it, so a NaN is not a reading here either.
+      if (value.isNaN) continue;
+      anySample = true;
+      count++;
+      if (count >= 2) return TraceState.ready;
+    }
+  }
+  return anySample ? TraceState.thin : TraceState.empty;
+}
+
 class EsiLoadTrace extends StatelessWidget {
   const EsiLoadTrace({
     super.key,
@@ -62,12 +96,20 @@ class EsiLoadTrace extends StatelessWidget {
                 ),
               ),
             ),
-            if (channels.isEmpty)
+            if (traceState(channels) != TraceState.ready)
               Positioned.fill(
                 child: Center(
-                  child: Text(
-                    'No load data yet',
-                    style: EsiType.body.copyWith(color: EsiPalette.faint),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: EsiSpace.lg),
+                    child: Text(
+                      switch (traceState(channels)) {
+                        TraceState.empty => 'No load data yet',
+                        TraceState.thin => 'Taking the first readings',
+                        TraceState.ready => '',
+                      },
+                      textAlign: TextAlign.center,
+                      style: EsiType.body.copyWith(color: EsiPalette.faint),
+                    ),
                   ),
                 ),
               ),
