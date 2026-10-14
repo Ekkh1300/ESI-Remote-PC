@@ -77,6 +77,38 @@ refuses. *(D54–D58)*
 write a state — reading the flag and pressing once would leave it the opposite of what was
 asked. Mute is now written directly. *(D58)*
 
+## This phone as the PC's speaker
+
+**New in this build, and shipped as a prerelease because it has not been heard on hardware.**
+The PC's own sound can now be played on the phone. A switch on the Control screen turns it on;
+the PC captures its default output device, and the phone plays it back at 24 kHz stereo.
+
+Four things were stopping it, and none of them was the codec — that half was already written
+and pinned to a shared fixture.
+
+The pump never sent a single packet. It waits on a semaphore and then reads a flag with an
+exchange that clears it, but the flag was only ever set to *zero*, so the exchange always said
+"nothing to do" and the loop skipped the block that actually sends. Audio piled up in the
+capture queue until it hit its cap and then dropped everything after — every log line said
+audio was running, and the wire carried nothing. *(D63)*
+
+Nothing could ask for it. The service had the methods to start and stop the loopback capture,
+audited and ready, and no WebSocket frame type ever reached them. The phone had no way to
+express the request. *(D63)*
+
+Audio frames were routed to whoever was watching the *screen*, so they were dropped whenever
+the picture was off, and would have been pushed to a device that only wanted the picture. They
+are now routed by frame type. *(D63)*
+
+And the phone could not recognise an audio frame at all: the shared 32-byte header carries the
+audio format in the fields that hold picture dimensions, and the app only knew the picture
+ones. *(D63)*
+
+**What is not claimed.** This has been verified by tests that pin the wire format to the PC
+encoder's own constants, and by building the native player into the APK — but not by listening
+to it. The emulator on the machine that built this will not boot, so the end-to-end path has
+not been heard on a real device. That is why this is a prerelease rather than the 1.0.1 tag.
+
 ## Navigation
 
 **Control did not sit at the foot of the left rail.** The rail chose between two layouts from
@@ -107,11 +139,6 @@ had worked. *(D60)*
 
 ## Not in this release
 
-**The phone-as-speaker audio is not finished.** The PC side captures and encodes it, but the
-phone has no player yet. The transport, the framing and the µ-law codec are in place and the
-volume work above is a prerequisite for it, but there is nothing to listen through. It is
-deliberately not advertised.
-
 **The agent's settings, device list and audit trail need a scope that is never granted.**
 Those endpoints require `Admin`, and nothing grants `Admin` to a paired device. They return
 403. This is unchanged from 1.0.0 and is called out here only so it is not mistaken for a new
@@ -119,13 +146,15 @@ regression.
 
 ## Verification
 
-- 299 C# tests, 267 Dart tests, all passing
+- 299 C# tests, 285 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
   `apksigner`, minSdkVersion 24
 - Continuous integration runs the C# build and tests on Windows and the Flutter analyze, test
   and release-APK build on every push — see `.github/workflows/ci.yml`
+- The audio wire format is pinned to the PC encoder's constants by `test/audio/audio_wire_test.dart`,
+  and the native player is confirmed present in the built APK's dex
 
 Both files, their sizes and their SHA-256 hashes are in `release/README.md`, which is the
 authoritative record of what is in this delivery.

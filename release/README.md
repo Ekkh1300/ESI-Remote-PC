@@ -9,13 +9,13 @@ What changed, and what it looked like before each fix, is in
 | File | Size | What it is |
 |---|---|---|
 | `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
+| `ESI-RemotePC-1.0.1.apk` | 66.9 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
 
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  D3B6AE3F3C9E299CB1F4D103B7768A9310B5F0D07C08FE0C37FDED99DA526D41
-ESI-RemotePC-1.0.1.apk             C2C8BD8853FF07B849C488A3CC05839AF6C8702005652F850F28F4AD101E6F23
+ESI-RemotePC-Setup-1.0.1-x64.exe  2877A17F3471F41C048BDC237C7A9D1BDE59B9C172E4EBC86AE27954FCC1DB09
+ESI-RemotePC-1.0.1.apk             F60C39EBB20123C6B4A82ACDF11E4A30680DAD3E31882BFB1528174247F4E467
 ```
 
 Both hashes change whenever their side of the project changes, and this build changed both: the
@@ -57,6 +57,50 @@ order of the press. The app does not send modifiers today, so this was latent - 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only
 interesting if you know what was given up.
+
+---
+
+## This build also carries: the phone as the PC's speaker (prerelease)
+
+A switch on the **Control** screen turns it on. The PC captures whatever it is playing, and the
+phone plays it back at 24 kHz stereo.
+
+It is called a prerelease because it has not been heard on a real device. The emulator on the
+machine that built this will not boot, so this is verified by tests that pin the wire format to
+the PC encoder's own constants, and by confirming the native player is inside the built APK -
+not by listening. Everything below is fixed and tested; the last mile is not.
+
+Four things were stopping it, and the codec was not one of them - that half was already written
+and pinned to a fixture shared with the C# implementation.
+
+**The PC never sent a packet.** `AudioPump.PumpLoop` waits on a semaphore and then reads a
+`_wakePending` flag with an exchange that clears it. The flag was only ever set to *zero*, so the
+exchange always returned zero, the loop always took the `continue`, and the block that calls
+`Send` was unreachable. Captured audio piled up in `_carried` until it hit its 40-packet cap and
+then every packet after it was dropped - while the logs said audio was running. The flag is now
+raised in `OnDataAvailable`, before the wake.
+
+**Nothing could ask for it.** `StartAudio` and `StopAudio` existed on the hub, were audited, and
+were called by nothing: no WebSocket frame type dispatched to them. `audio.start` / `audio.stop`
+exist now, require the `control` scope, and answer with `audio.state`. Disconnect stops the
+capture too, so a phone that walks away does not leave the PC's output device open.
+
+**Audio frames went to whoever was watching the screen.** `OnFrameReceived` forwarded every frame
+to `_activeStreamDevice`, so audio was dropped whenever the picture was off, and would have been
+pushed to a device that only wanted the picture. It routes on the frame type in the 32-byte
+header now.
+
+**The phone could not recognise an audio frame.** The shared 32-byte header carries the audio
+format in the fields that hold picture dimensions - rate where the width is, channels where the
+height is - and `ScreenFrameHeader` knew only the picture ones. It knows type 5 and codec 3 now,
+and treats a frame as audio only when *both* agree: half a match is a corrupt frame, not a new
+codec.
+
+The player itself is `MainActivity.kt` (no longer a bare `FlutterActivity`) behind a
+`MethodChannel`. Its writes run on a background thread because `AudioTrack.write` blocks whenever
+the hardware buffer is full, and blocking the platform thread would freeze the screen stream and
+the input injector. Its queue is bounded and drops the oldest, for the same reason the PC's
+capture queue is: audio from half a second ago is worse than a gap.
 
 ---
 
@@ -180,10 +224,10 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 179 unit and integration
-tests, 19 live probes against a booted agent, and a real install â†’ serve â†’ uninstall cycle
-that was repeated from the delivered installer file. The Android side is 163 Dart tests, and
-â€” the part that matters â€” a live check that starts a throwaway agent and drives the app's
+**Verified by running it.** The Windows build is green end to end: 299 unit and integration
+tests, 19 live probes against a booted agent, and a real install â†' serve â†' uninstall cycle
+that was repeated from the delivered installer file. The Android side is 285 Dart tests, and
+â€" the part that matters â€" a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
 
