@@ -246,9 +246,17 @@ completion. See [`PROTOCOL.md`](PROTOCOL.md) §9.4.
 
 `pair approve` grants `read`, `control` and `files`. It does **not** grant `admin`, so a
 CLI-approved device cannot rotate keys, read the audit log, change settings or manage other
-devices. Getting a second `admin` device requires a device that already has it, via
-`POST /api/v1/devices/{deviceId}/rotate` and
-`POST /api/v1/devices` (there is no way to grant `admin` through pairing or the CLI at all).
+devices.
+
+There is at present **no** way to grant `admin` to anyone. Pairing passes
+`PairingManager.DefaultScopes`, `esirc pair approve` passes that same constant, and
+`DeviceStore.SetScopes` — the only method that writes scopes — has no caller. The route this
+paragraph used to point at, `POST /api/v1/devices`, does not exist: the agent serves only
+`GET /api/v1/devices`, `DELETE /api/v1/devices/{deviceId}` and
+`POST /api/v1/devices/{deviceId}/rotate`, and rotating a device's keys does not touch its
+scopes. Until such a route is built, every paired device in an installation is limited to
+`read`, `control` and `files` permanently. `ScopeTableTests` pins both halves of that: the
+routes a default pairing reaches, and the routes it is refused.
 
 The service must be stopped first. `esirc pair` refuses otherwise, because approving an
 attempt the service is holding in memory would leave the two disagreeing about whether the

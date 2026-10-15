@@ -22,11 +22,26 @@
 
 [CmdletBinding()]
 param(
-    [string] $Setup = '..\artifacts\ESI-RemotePC-Setup-1.0.0-x64.exe',
+    [string] $Setup,
     [int]    $HttpsPort = 48220
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The installer's name is derived, never written here. A literal default naming 1.0.0 went
+# stale the moment the version moved and stayed silent for as long as the old file was
+# still on disk - this script would then prove everything about an installer nobody built
+# recently, which is the precise failure build.ps1's own comment warns about. `build.ps1
+# -WithInstallCycle` passes `-Setup` explicitly; this path is for running the script alone.
+if (-not $Setup) {
+    $version = ([regex]::Match(
+        (Get-Content (Join-Path $PSScriptRoot '..\Directory.Build.props') -Raw),
+        '<Version>([^<]+)</Version>')).Groups[1].Value
+    if (-not $version) {
+        throw "Could not read <Version> from Directory.Build.props, so there is no installer name to test. Pass -Setup."
+    }
+    $Setup = Join-Path $PSScriptRoot "..\artifacts\ESI-RemotePC-Setup-$version-x64.exe"
+}
 
 $script:Failures = 0
 $script:Checks = 0

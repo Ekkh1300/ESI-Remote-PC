@@ -333,7 +333,15 @@ public sealed class SignatureAuthenticationMiddleware(RequestDelegate next)
         await next(context).ConfigureAwait(false);
     }
 
-    private static bool IsPublic(string path)
+    /// <summary>
+    /// The unauthenticated surface: what a request with no signature at all can reach.
+    ///
+    /// Internal rather than private purely so `ScopeTableTests` can pin this list. It is the
+    /// most security-critical table in the product - everything here is reachable by anyone
+    /// who can open a socket - and until it was reachable from a test it was covered by
+    /// nothing, which is how a list meant to be short can grow one path at a time.
+    /// </summary>
+    internal static bool IsPublic(string path)
     {
         if (path == "/") return true;
         if (path.Equals("/api/v1/handshake", StringComparison.OrdinalIgnoreCase)) return true;

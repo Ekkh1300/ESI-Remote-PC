@@ -171,20 +171,15 @@ class FilesNotifier extends Notifier<FilesState> {
 
     final size = await source.length();
     try {
-      if (size <= EsiProtocol.maxSignedBodyBytes) {
-        final bytes = await source.readAsBytes();
-        onProgress?.call(bytes.length, bytes.length);
-        final json = await api.sendRaw(
-          method: 'POST',
-          path: '/files/upload',
-          body: bytes,
-          contentType: 'application/octet-stream',
-        );
-        final result = UploadResult.fromJson(json);
-        await _refreshCurrent();
-        return (ok: result.completed, message: 'Uploaded ${result.bytesWritten} bytes.');
-      }
-
+      // §7.4: `/api/v1/files/upload` is not a signed endpoint. It authenticates with a
+      // single-use ticket, and the ticket is also where the destination path comes from.
+      //
+      // There used to be a second path for files under the signed-body cap that PUT the bytes
+      // straight there without asking for a ticket, on the grounds that it "keeps one code
+      // path for the common case". It was the only place that path was ever exercised: the
+      // agent requires a ticket on it exactly, so every upload of a file of 8 MiB or less came
+      // back 401 "An upload ticket is required" while every file larger than that succeeded.
+      // One code path now, and it is the one the endpoint accepts.
       final ticketJson = await api.postJson('/files/upload-ticket', body: <String, dynamic>{
         'path': targetPath,
         'size': size,

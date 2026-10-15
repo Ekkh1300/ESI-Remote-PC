@@ -17,8 +17,11 @@ import 'package:flutter_test/flutter_test.dart';
 /// which reads like success.
 /// 
 /// 
-/// These are source guards because `ScreenSurface` draws through `dart:ui`, which has no test
-/// host here. What is guarded is the reasoning, which is the part that went wrong.
+/// These started as source guards on the claim that `ScreenSurface` draws through `dart:ui`
+/// and so has no test host here. It does: `flutter test` runs on the real engine, and
+/// `test/screen_surface_behaviour_test.dart` now decodes real bytes through `apply()` and
+/// measures the predicate instead of matching its source. What is guarded below is what is
+/// still only text - the sentences on the panel, which no amount of tile decoding asserts.
 /// 
 void main() {
   final screenFile = File('lib/src/ui/screens/remote_screen.dart');

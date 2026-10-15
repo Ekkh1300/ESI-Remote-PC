@@ -14,8 +14,8 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  0BDE74B04187C7ED84F81EF27EC7EFC50433EF768D4D3289F1D77398D2FE811E
-ESI-RemotePC-1.0.1.apk             641888AC805CB165CBFFD0B57AA60BA66AAF2182B9BC9472659DC16CF35C1C5A
+ESI-RemotePC-Setup-1.0.1-x64.exe  A2A30EECE6D2E7187BDFF9A9AA663A66581A1E3A93D6130F94671DC1A51073DB
+ESI-RemotePC-1.0.1.apk             F677CB71E2DDB957AC9CB4261F6C51DDE29B139770151165629F48EABC4C2CC3
 ```
 
 Both hashes change whenever their side of the project changes, and this build changed both: the
@@ -25,7 +25,7 @@ above is the current one, and the two files in this directory always agree with 
 
 ## What this build fixes
 
-Seven, each measured rather than suspected.
+Eight, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -86,6 +86,16 @@ none carried them up, so one Ctrl+C left the machine in Ctrl and the next keystr
 shortcut with nothing on the phone able to undo it. The release half is sent now, in reverse
 order of the press. The app does not send modifiers today, so this was latent - it bites as soon
  as it does.
+
+**Every upload of a file 8 MB or smaller was refused, and larger ones succeeded.** The agent's
+`/files/upload` is authenticated by a single-use ticket, and the ticket is also the only place
+the destination path is carried. The phone had a second path for files under the signed-body
+cap that PUT the bytes straight there without asking for one, to "keep one code path for the
+common case" - it produced two paths, and the smaller was the only one anyone would ever take.
+The agent requires a ticket on that route *exactly*, so an ordinary photo came back `401` "An
+upload ticket is required" while an 80 MB video went through. There is one path now, and it is
+the one the endpoint accepts. A test drives both sides of the old 8 MiB boundary and fails
+against the code as it shipped.
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only
@@ -257,9 +267,9 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 299 unit and integration
+**Verified by running it.** The Windows build is green end to end: 423 unit and integration
 tests, 19 live probes against a booted agent, and a real install â†' serve â†' uninstall cycle
-that was repeated from the delivered installer file. The Android side is 285 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 300 Dart tests, and
 â€" the part that matters â€" a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
@@ -760,9 +770,14 @@ the honest answer at this scale: no driver, nothing installed on the PC, and it 
 one `.exe`.
 
 The frames travel over the signed WebSocket and are validated before they are stored - `payloadLength`
-from the wire is checked against what actually arrived before it is used to slice. Only *reading* the
-stored frames is unauthenticated, because MJPEG cannot carry a per-frame signature and its consumers
-cannot add one; what protects the machine, the pairing secret, is unchanged.
+from the wire is checked against what actually arrived before it is used to slice. Reading the stored
+frames was *meant* to be unauthenticated, because MJPEG cannot carry a per-frame signature and its
+consumers cannot add one; what protects the machine, the pairing secret, is unchanged. It is not,
+though: `SignatureAuthenticationMiddleware.IsPublic` never listed `/camera/stream.mjpg`, so the route
+has always required a request signature that OBS, VLC and ffmpeg cannot produce, and the sentence
+that used to sit here described an intent the middleware never implemented. The signed behaviour is
+what ships and what `ScopeTableTests` pins; whether to open the stream is a decision still to be
+taken, not a detail to correct in passing.
 
 The phone half is not written yet, so the server side cannot be exercised end to end.
 

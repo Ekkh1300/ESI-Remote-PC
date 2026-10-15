@@ -185,6 +185,16 @@ and the parameter is named so the two cannot be confused again. Move ran but dro
 result the same way, and both "add to this folder" actions ran and never said whether they
 had worked. *(D60)*
 
+**Every upload of a file 8 MB or smaller was refused, and larger ones succeeded.** The agent's
+`/files/upload` is authenticated by a single-use ticket, and the ticket is also the only place
+the destination path is carried. The phone had a second path for files under the signed-body
+cap that PUT the bytes straight there without asking for one, to "keep one code path for the
+common case" — it produced two paths, and the smaller was the only one anyone would ever take.
+The agent requires a ticket on that route *exactly*, so an ordinary photo came back `401` "An
+upload ticket is required" while an 80 MB video went through. There is one path now, and it is
+the one the endpoint accepts. A test drives both sides of the old 8 MiB boundary and fails
+against the code as it shipped. *(D68)*
+
 ---
 
 ## Not in this release
@@ -194,9 +204,28 @@ Those endpoints require `Admin`, and nothing grants `Admin` to a paired device. 
 403. This is unchanged from 1.0.0 and is called out here only so it is not mistaken for a new
 regression.
 
+**The MJPEG camera stream demands a signature its intended viewers cannot produce.**
+`GET /camera/stream.mjpg` exists for OBS, VLC and ffmpeg, and both of this product's documents
+say reading the stored frames is unauthenticated. `SignatureAuthenticationMiddleware.IsPublic`
+does not list that path, so it has always required a per-request signature and no external
+program has ever been able to open the stream. The conservative of the two readings is what
+ships and what `ScopeTableTests` pins; making it genuinely public is a decision to take or
+refuse, not a detail to correct quietly. The three camera routes were missing from
+`PROTOCOL.md` entirely until now — they are §6.12.
+
+**Three rows of the specification disagreed with the code, and the code was right each time.**
+`PROTOCOL.md` §6.10 called `/notifications/rules` `admin` where the code and `SECURITY.md` §7
+both say `read` (the app ships a rules editor every paired device can open); §6.6 called
+`/files/roots` `read` where the file manager requires `files`, a discrepancy `SECURITY.md` had
+already noted in passing; and §6.6 described `POST /files/upload` as taking a `path`, when the
+route has only ever taken `?ticket=` — §7.4 of the same document said so. That last row is the
+misunderstanding the broken branch in D68 was built on. All three are corrected, and the whole
+scope table is now pinned by `ScopeTableTests`, so the next drift fails a build rather than a
+handset.
+
 ## Verification
 
-- 299 C# tests, 291 Dart tests, all passing
+- 423 C# tests, 300 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by

@@ -1209,20 +1209,31 @@ public static class Endpoints
 
     /// <summary>
     /// A phone's camera, exposed two ways: a still frame for the app to poll, and an MJPEG
-    /// stream any program on the network can open as a camera source.
+    /// stream for an outside program to open as a camera source.
     /// <para>
-    /// The stream is deliberately unauthenticated, and that is a real trade rather than an
-    /// oversight. MJPEG has no way to carry a per-frame signature, and the consumers this exists
-    /// for - OBS, VLC, ffmpeg - cannot add one, so requiring the request signature would mean
-    /// only our own client could ever watch it. Anyone who can already reach the agent over the
-    /// network is inside the trust boundary this product has always had; the pairing secret is
-    /// what protects the machine, and that is unchanged. What is protected is the camera feed's
-    /// availability, not its confidentiality.
+    /// The stream was meant to be unauthenticated, and the argument for that was a real trade
+    /// rather than an oversight. MJPEG has no way to carry a per-frame signature, and the
+    /// consumers this exists for - OBS, VLC, ffmpeg - cannot add one, so requiring the request
+    /// signature would mean only our own client could ever watch it. Anyone who can already
+    /// reach the agent over the network is inside the trust boundary this product has always
+    /// had; the pairing secret is what protects the machine, and that is unchanged. What is
+    /// protected is the camera feed's availability, not its confidentiality.
+    /// </para>
+    /// <para>
+    /// It is not unauthenticated, though. <c>SignatureAuthenticationMiddleware.IsPublic</c>
+    /// does not return true for <c>/api/v1/camera/stream.mjpg</c>, and the path is not on the
+    /// ticket-authenticated list either, so the request signature is required - and the
+    /// external programs named above cannot produce one, which means they cannot open this
+    /// stream at all. The comment said one thing and the middleware did the other; the safer
+    /// of the two is what has been shipping, and `ScopeTableTests` pins it as
+    /// <c>false</c> precisely so the disagreement cannot go unnoticed again. Turning the
+    /// stream public is the trade described in the first paragraph, and it has not been
+    /// taken: it needs to be decided, not inferred from a comment that was never true.
     /// </para>
     /// <para>
     /// The frames themselves arrive over the signed WebSocket, so a phone cannot push video
     /// without being a paired device with the control scope. Only the reading of the stored
-    /// frames is open.
+    /// frames is open to argument here, not the writing of it.
     /// </para>
     /// </summary>
     public static void MapCamera(IEndpointRouteBuilder endpoints)

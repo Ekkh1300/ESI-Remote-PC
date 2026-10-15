@@ -601,7 +601,7 @@ no UI), `elevatedUser` (interactive + elevated via the session agent).
 
 | Method | Path | Scope | Notes |
 |---|---|---|---|
-| `GET` | `/api/v1/files/roots` | `read` | The configured allowed roots + a `readOnly` flag each |
+| `GET` | `/api/v1/files/roots` | `files` | The configured allowed roots + a `readOnly` flag each |
 | `GET` | `/api/v1/files/list` | `files` | `path` (optional → default root), `showHidden` |
 | `GET` | `/api/v1/files/stat` | `files` | `path` |
 | `POST` | `/api/v1/files/mkdir` | `files` | `{"path":"…"}` |
@@ -609,7 +609,7 @@ no UI), `elevatedUser` (interactive + elevated via the session agent).
 | `POST` | `/api/v1/files/move` | `files` | `{"from":"…","to":"…"}` |
 | `DELETE` | `/api/v1/files` | `files` | `path` (query) |
 | `GET` | `/api/v1/files/download` | `files` | `path`; streams with `Content-Disposition: attachment` |
-| `POST` | `/api/v1/files/upload` | `files` | `path` (target file), raw body = content |
+| `PUT`/`POST` | `/api/v1/files/upload` | `files` | `?ticket=` (§7.4), raw body = content. The request is authenticated by the ticket, not by a signature, and the ticket is where the destination path comes from — there is no `path` parameter on this route |
 | `POST` | `/api/v1/files/upload-ticket` | `files` | Body `{"path":"…","size":123}` → short-lived upload ticket (§7.4) |
 | `GET` | `/api/v1/files/search` | `files` | `root`, `query`, `maxResults` |
 | `GET` | `/api/v1/files/recent` | `files` | Recently accessed files, from the agent's own history table |
@@ -698,8 +698,8 @@ restores the previously captured state exactly.
 | `POST` | `/api/v1/notifications/read-all` | `read` |
 | `DELETE` | `/api/v1/notifications/{id}` | `read` |
 | `DELETE` | `/api/v1/notifications` | `read` — clears all |
-| `GET` | `/api/v1/notifications/rules` | `admin` |
-| `PUT` | `/api/v1/notifications/rules` | `admin` |
+| `GET` | `/api/v1/notifications/rules` | `read` |
+| `PUT` | `/api/v1/notifications/rules` | `read` |
 
 ```json
 { "notifications": [
@@ -760,6 +760,28 @@ Settings shape (partial; the full schema lives in `SettingsModel.cs`):
   "notifications": { "rules": [ /* … */ ], "retentionDays": 14, "toastEnabled": true },
   "debug": { "enabled": false, "verboseLogging": false, "allowLoopbackOnly": false } }
 ```
+
+### 6.12 Camera
+
+A phone can publish its own camera for the PC to watch. Frames travel up the signed
+WebSocket with the `control` scope; these three routes only read what has already been
+stored.
+
+| Method | Path | Scope |
+|---|---|---|
+| `GET` | `/api/v1/camera/state` | `read` — `live`, `width`, `height`, `ageMs`, `streamUrl` |
+| `GET` | `/api/v1/camera/latest` | `read` — newest frame as `image/jpeg`, 404 when there is none |
+| `GET` | `/api/v1/camera/stream.mjpg` | `read` — multipart MJPEG until the camera stops |
+
+These three were missing from this document entirely until 1.0.1. They are `read` by the
+"everything else" branch of [`SECURITY.md`](SECURITY.md) §7, and they are all GET, so no
+camera route changes state.
+
+`stream.mjpg` **requires a request signature** in the agent as shipped:
+`SignatureAuthenticationMiddleware.IsPublic` does not list it, so an outside program cannot
+open the stream no matter what `MapCamera`'s summary used to claim. That is the conservative
+of the two readings and it is what is pinned by `ScopeTableTests`; whether the stream becomes
+genuinely unauthenticated is an open decision, not a documentation detail.
 
 ---
 

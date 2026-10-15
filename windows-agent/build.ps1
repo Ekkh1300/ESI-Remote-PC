@@ -244,7 +244,12 @@ if ($WithInstallCycle) {
         # that is no longer in the tree - exactly the false confidence the test exists to
         # prevent. It happened: an install cycle passed against an installer built the
         # day before, while the code under review was never installed.
-        $setup = Join-Path $artifacts 'ESI-RemotePC-Setup-1.0.0-x64.exe'
+        #
+        # The filename is built from the version rather than written into the script, for
+        # the same reason: a literal `1.0.0` here meant the cycle compiled a fresh 1.0.1
+        # installer and then tested a 1.0.0 one if it happened to be lying around, which is
+        # the identical defect one line below in the opposite direction.
+        $setup = Join-Path $artifacts "ESI-RemotePC-Setup-$productVersion-x64.exe"
         $iscc  = Resolve-Iscc
 
         if (-not $iscc) {

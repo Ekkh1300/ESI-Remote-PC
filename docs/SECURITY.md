@@ -228,11 +228,13 @@ first:
 | `/api/v1/auth/rotate`, `/api/v1/devices`, `/api/v1/settings`, `/api/v1/logs`, `/api/v1/audit` | `admin` | `admin` |
 | `/api/v1/files` | `files` | `files` |
 | `/api/v1/power`, `/api/v1/apps`, `/api/v1/media`, `/api/v1/remote`, `/api/v1/gaming` | `read` | `control` |
+| `/api/v1/system/process` | `read` | `control` |
 | everything else | `read` | `read` |
 
 The file manager requires `files` for reads as well as writes: enumerating a directory
-tree is about as sensitive as writing to it. Note that this includes
-`GET /api/v1/files/roots`, which `PROTOCOL.md` §6.6 documents as `read`.
+tree is about as sensitive as writing to it, and `GET /api/v1/files/roots` is part of that
+file manager. (`PROTOCOL.md` §6.6 used to list it as `read`; that row was wrong and has been
+corrected, so this note records the history rather than a live discrepancy.)
 
 ### Rate limiting
 
