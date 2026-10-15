@@ -205,15 +205,30 @@ internal sealed class CoreAudioEndpoint : IDisposable
     private readonly IAudioEndpointVolume _volume;
     private readonly IMMDevice _device;
 
-    private CoreAudioEndpoint(IMMDevice device, IAudioEndpointVolume volume, string? friendlyName)
+    private CoreAudioEndpoint(
+        IMMDevice device,
+        IAudioEndpointVolume volume,
+        string? friendlyName,
+        string? deviceId)
     {
         _device = device;
         _volume = volume;
         FriendlyName = friendlyName;
+        DeviceId = deviceId;
     }
 
     /// <summary>The user-visible name of the endpoint, e.g. "Speakers (Realtek(R) Audio)".</summary>
     public string? FriendlyName { get; }
+
+    /// <summary>
+    /// Core Audio's stable device identifier, or null when it could not be read.
+    /// <para>
+    /// This is what makes an endpoint comparable to the *current* default. The friendly name
+    /// is not: two devices can share one, and a headset's name changes with its connection
+    /// state.
+    /// </para>
+    /// </summary>
+    public string? DeviceId { get; }
 
     /// <summary>
     /// The default render endpoint, or null when there is none.
@@ -242,12 +257,92 @@ internal sealed class CoreAudioEndpoint : IDisposable
                 || raw is not IAudioEndpointVolume volume)
                 return null;
 
-            return new CoreAudioEndpoint(device, volume, ReadFriendlyName(device));
+            return new CoreAudioEndpoint(device, volume, ReadFriendlyName(device), ReadDeviceId(device));
         }
         catch
         {
             // No endpoint, no endpoint volume interface, or not on Windows at all. The caller
             // reports the volume as unknown; that is a fact about the machine, not a fault.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The machine's current default render device id, or null when there is none.
+    /// </summary>
+    internal static string? TryDefaultDeviceId()
+    {
+        try
+        {
+            var coClass = Type.GetTypeFromCLSID(
+                new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E"), throwOnError: true)!;
+
+            if (Activator.CreateInstance(coClass) is not IMMDeviceEnumerator enumerator)
+                return null;
+
+            if (enumerator.GetDefaultAudioEndpoint(EDataFlow.Render, ERole.Console, out var device) != 0
+                || device is null)
+                return null;
+
+            return ReadDeviceId(device);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether this endpoint is still the device Windows would send a volume key to.
+    /// </summary>
+    /// <para>
+    /// The default device is not a constant for the life of a process. A Bluetooth headset
+    /// that connects takes over as the default; unplugging a USB DAC hands it back to the
+    /// speakers. An endpoint opened before that still names the old device, so moving *its*
+    /// volume changes a device nobody is listening to - which is what "the volume only affects
+    /// one output" looks like from the phone, where the headset is the one being heard.
+    /// </para>
+    public bool IsStillDefault()
+    {
+        var current = TryDefaultDeviceId();
+        return current is not null
+            && DeviceId is not null
+            && string.Equals(current, DeviceId, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Releases the two COM references this endpoint holds, so a machine that swaps devices
+    /// often does not accumulate runtime callable wrappers until the process is restarted.
+    /// </summary>
+    public void Release()
+    {
+        try
+        {
+            Marshal.ReleaseComObject(_volume);
+        }
+        catch
+        {
+            // Already released, or the device was unplugged out from under it.
+        }
+
+        try
+        {
+            Marshal.ReleaseComObject(_device);
+        }
+        catch
+        {
+            // Same.
+        }
+    }
+
+    private static string? ReadDeviceId(IMMDevice device)
+    {
+        try
+        {
+            return device.GetId(out var id) == 0 ? id : null;
+        }
+        catch
+        {
             return null;
         }
     }

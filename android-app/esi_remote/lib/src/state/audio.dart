@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../audio/phone_speaker.dart';
+import '../protocol/models.dart';
 import 'connection.dart';
 
 /// Whether the PC's own audio is being played on this phone.
@@ -56,9 +57,33 @@ class SpeakerNotifier extends Notifier<SpeakerState> {
     state = SpeakerState.starting;
     _message = null;
 
-    // The PC is asked first: until it captures, there are no frames to play, and opening the
-    // track early would only leave it running in silence.
+    // The listener is attached before the request is written, not after it. The reply can
+    // arrive on the next turn of the event loop, and this runs over a LAN, so a listener
+    // attached after the send can miss a confirmation that was already given - and then wait
+    // forever for one.
+    //
+    // No reply at all is not a failure. An agent too old to answer `audio.state` is also one
+    // that sends no audio, but the track still opens and whatever does arrive is played;
+    // where that silence comes from is the PC's business, not a reason to refuse the request.
+    final answer = socket.audioStates
+        .first
+        .then<AudioState?>((value) => value)
+        .timeout(
+          const Duration(seconds: 4),
+          onTimeout: () => null,
+        );
+
     socket.startAudio();
+
+    // This is the half that was missing. Without it the switch reported on the moment the
+    // track opened, and a PC that had refused - no session agent running, another phone
+    // already taking the audio - played silence under a control that said everything was
+    // fine. Silence and a codec fault look identical from here; the PC saying no does not.
+    final AudioState? accepted = await answer;
+    if (accepted != null && !accepted.active) {
+      _fail(accepted.detail ?? 'The PC refused to capture its audio.');
+      return;
+    }
 
     try {
       // The socket may be replaced on reconnect. Reading it again here means the speaker is

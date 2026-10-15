@@ -1166,10 +1166,14 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
 
         foreach (var process in processes.EnumerateArray())
         {
-            var startedAt = process.GetProperty("startedAt");
-            if (startedAt.ValueKind == JsonValueKind.Null)
+            // `startedAt` is a nullable long, and the serializer *omits* a null field rather
+            // than writing `startedAt: null`. So absence is the normal encoding of "this
+            // process would not say", and reading it with GetProperty throws on exactly the
+            // row this test is written to tolerate.
+            if (!process.TryGetProperty("startedAt", out var startedAt)
+                || startedAt.ValueKind == JsonValueKind.Null)
             {
-                // Protected processes do not report a start time, and null is a honest
+                // Protected processes do not report a start time, and null is an honest
                 // answer. It is the number that has to be right.
                 continue;
             }
@@ -1200,8 +1204,9 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
             var lastModified = entry.GetProperty("lastModified").GetInt64();
             Assert.InRange(lastModified, 1_600_000_000, now + 60);
 
-            var created = entry.GetProperty("created");
-            if (created.ValueKind != JsonValueKind.Null)
+            // `created` is nullable and therefore absent rather than null when unknown.
+            if (entry.TryGetProperty("created", out var created)
+                && created.ValueKind != JsonValueKind.Null)
             {
                 Assert.InRange(created.GetInt64(), 1_600_000_000, now + 60);
             }
@@ -1224,19 +1229,92 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
         using var document = JsonDocument.Parse(body);
         var root = document.RootElement;
 
-        var notBefore = root.GetProperty("notBefore");
-        if (notBefore.ValueKind != JsonValueKind.Null)
+        // Both are nullable longs, and absent rather than null when the agent has no certificate to
+        // date. A handshake on a machine before the first one is provisioned is normal, not a
+        // failure, and must not be able to fail this test.
+        if (root.TryGetProperty("notBefore", out var notBefore)
+            && notBefore.ValueKind != JsonValueKind.Null)
         {
             Assert.InRange(notBefore.GetInt64(), 1_600_000_000, now + 60);
         }
 
-        var notAfter = root.GetProperty("notAfter");
-        if (notAfter.ValueKind != JsonValueKind.Null)
+        if (root.TryGetProperty("notAfter", out var notAfter)
+            && notAfter.ValueKind != JsonValueKind.Null)
         {
             // Still in the future, and short of 2100. The buggy value lands in 3970.
             Assert.InRange(notAfter.GetInt64(), now - 60, 4_102_444_800);
         }
     }
+
+    // ===============================================================================
+    // Per-process CPU
+    // ===============================================================================
+
+    /// <summary>
+    /// A second listing carries a CPU rate for at least one process.
+    /// <para>
+    /// Per-process CPU is a <i>rate</i>: the change in a process's own processor time over
+    /// the change in wall time. One observation cannot produce it at all, which is why the
+    /// first listing legitimately reports nothing.
+    /// </para>
+    /// <para>
+    /// Until this existed the agent never sent the field. The phone parsed the absent value
+    /// as 0 and rendered a confident "0.0% CPU" beside every process on a machine that was
+    /// running them flat out, and sorting by CPU did nothing because every value was equal.
+    /// A usage column that is always zero is worse than no usage column, because it reads as
+    /// an answer rather than as a missing one.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_second_process_listing_carries_a_cpu_reading()
+    {
+        await ReadProcessesAsync();
+        var second = await ReadProcessesAsync();
+
+        Assert.NotEmpty(second);
+
+        // The rate is bounded on both sides by construction, and a reading outside 0-100
+        // would be a division that lost track of elapsed time.
+        var readings = second.Where(p => p.CpuPercent is not null).ToList();
+        Assert.NotEmpty(readings);
+        Assert.All(readings, p => Assert.InRange(p.CpuPercent!.Value, 0, 100));
+
+        // A rate for a process that was seen once is not reported as anything, least of all
+        // as zero. Asserted over the whole list because processes come and go between the
+        // two calls.
+        Assert.All(
+            second,
+            p => Assert.True(p.CpuPercent is null || p.CpuPercent >= 0));
+    }
+
+    private async Task<List<ProcessReading>> ReadProcessesAsync()
+    {
+        var response = await SendSignedAsync(HttpMethod.Get, "/api/v1/system/processes?limit=50");
+        var body = await ReadAsync(response);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var readings = new List<ProcessReading>();
+        using var document = JsonDocument.Parse(body);
+
+        foreach (var process in document.RootElement.GetProperty("processes").EnumerateArray())
+        {
+            // The serializer drops a null field rather than writing `cpuPercent: null`, so
+            // absence is the normal encoding of "no reading yet" and `GetProperty` would
+            // throw on exactly the rows this test is here to allow.
+            double? cpu = null;
+            if (process.TryGetProperty("cpuPercent", out var value) && value.ValueKind != JsonValueKind.Null)
+            {
+                cpu = value.GetDouble();
+            }
+
+            readings.Add(new ProcessReading(process.GetProperty("pid").GetInt32(), cpu));
+        }
+
+        return readings;
+    }
+
+    private sealed record ProcessReading(int Pid, double? CpuPercent);
 
     // ===============================================================================
     // The client side of the protocol, written from the spec

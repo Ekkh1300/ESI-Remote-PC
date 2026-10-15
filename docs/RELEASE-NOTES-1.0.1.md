@@ -77,6 +77,17 @@ refuses. *(D54–D58)*
 write a state — reading the flag and pressing once would leave it the opposite of what was
 asked. Mute is now written directly. *(D58)*
 
+**The volume slider moved one output and not the one you were hearing.** It changed *one*
+device's volume and never noticed when that stopped being the device you were listening to.
+Plug in a Bluetooth headset and Windows makes it the default — but the phone's slider kept
+writing to the speakers it had found when it first connected, so you moved the speakers and
+heard nothing happen. The volume *keys* were never wrong, which is why this looked like a
+Bluetooth problem rather than a stale-handle one.
+
+The endpoint now records which device it opened and re-opens the default whenever that changes.
+The failure is latched only on a first attempt, so one unplugged cable cannot leave volume dead
+until the PC is restarted. *(D71)*
+
 ## This phone as the PC's speaker
 
 **New in this build, and shipped as a prerelease because it has not been heard on hardware.**
@@ -103,6 +114,17 @@ are now routed by frame type. *(D63)*
 And the phone could not recognise an audio frame at all: the shared 32-byte header carries the
 audio format in the fields that hold picture dimensions, and the app only knew the picture
 ones. *(D63)*
+
+**And the phone never heard the PC say no.** The PC answers `audio.start` with an `audio.state`
+frame saying whether it accepted — and nothing on the phone was listening for it. The switch
+reported success the moment the *phone's* track opened, and the phone's track opens whether or
+not the PC is capturing anything. So a PC that had refused — no session agent running, another
+phone already holding the audio — played silence under a control that read **on**, which from
+the phone is indistinguishable from a broken codec. It now waits for the answer, and if the PC
+declines it says so and leaves the switch off. The listener is attached *before* the request is
+written, because a reply can arrive on the next turn of the event loop and a listener attached
+after the send would miss it and wait forever for a confirmation that had already been given.
+*(D72)*
 
 **What is not claimed.** This has been verified by tests that pin the wire format to the PC
 encoder's own constants, and by building the native player into the APK — but not by listening
@@ -138,6 +160,22 @@ pretending it was `{}`.
 The four screens that read those lists also swallowed the failure: a request that failed came
 back as an empty list, which is the same picture as a machine with nothing to report. They now
 say what happened. *(D65)*
+
+**And the CPU column was always zero.** The agent never sent `cpuPercent` at all — the field
+exists in the contract and nothing filled it in. The phone parsed the absent value as `0`, so
+every process on a machine running them flat out read `0.0% CPU`, the bar beside it stayed
+empty, and sorting by CPU did nothing because every value was equal. A usage column that always
+reads zero is worse than no usage column: it reads as an answer instead of as a missing one.
+
+CPU per process is a *rate* — the change in a process's own processor time over the change in
+wall time — so one listing cannot produce one, and the first listing of a process legitimately
+carries no figure. It now carries **no figure** rather than a zero, and the app shows
+"measuring…" instead of claiming idleness. The second listing has real numbers, because by then
+there is a previous observation to subtract from. *(D70)*
+
+**The sort chips did nothing.** `CPU`, `Memory` and `Name` were drawn as status tags, not
+buttons: there was no tap handler on any of them, and the highlighted one was hard-coded rather
+than derived from anything. They reorder the list now. *(D70)*
 
 **Every timestamp the PC sent was 1,970 years out.** A process's start time arrived as
 `started in 17259887 h` — and that figure is not a random overflow, it is the distance between
@@ -211,6 +249,21 @@ against the code as it shipped. *(D68)*
 
 ## Not in this release
 
+**Two fields on every process row are still empty.** `/system/processes` also carries `user` and
+`isElevated`, and nothing fills either in — reading a process's owner needs an access token opened
+against it, and the agent lists processes it is not privileged to open. So the `admin` tag on the
+Running tab never appears and no username is shown. They are honest empties rather than wrong
+answers, and they are unchanged from 1.0.0. Left alone deliberately: the CPU figure is what that
+screen exists to show, and populating the other two needs a different privilege than the one the
+service holds.
+
+**An agent older than this release cannot play the PC's audio.** The loopback capture lives in the
+per-user session agent, and the PC's own output device is only reachable from the interactive
+session. An agent built before the audio transport existed has no `audio.start` frame type at all,
+so the switch on the Control screen has nothing to talk to. This is the phone refusing to claim
+success it did not get, not a new capability — installing the agent from this release is what
+enables it.
+
 **The agent's settings, device list and audit trail need a scope that is never granted.**
 Those endpoints require `Admin`, and nothing grants `Admin` to a paired device. They return
 403. This is unchanged from 1.0.0 and is called out here only so it is not mistaken for a new
@@ -237,7 +290,7 @@ handset.
 
 ## Verification
 
-- 426 C# tests, 300 Dart tests, all passing
+- 429 C# tests, 309 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by

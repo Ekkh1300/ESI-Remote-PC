@@ -588,6 +588,11 @@ public static class Endpoints
                     Name = p.Name,
                     WorkingSetBytes = p.WorkingSet,
                     StartedAt = UnixTime.Seconds(p.StartedAt),
+
+                    // Null on the first listing, not zero. A process seen once has produced no
+                    // rate yet, and reporting that as idle would claim the one thing the
+                    // column exists to rule out.
+                    CpuPercent = p.CpuPercent,
                 })
                 .ToList();
 

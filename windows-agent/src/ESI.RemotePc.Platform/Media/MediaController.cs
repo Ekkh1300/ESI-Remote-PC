@@ -64,24 +64,51 @@ public sealed class MediaController(ILogger<MediaController> log)
     /// </summary>
     public bool TryConnect()
     {
-        if (_endpoint is not null)
-            return true;
+        var hadEndpoint = _endpoint is not null;
 
-        // Cached rather than retried. Inside a service this fails forever and identically, so
-        // retrying it on every poll is a warning line in the log every three seconds for a
-        // fact that does not change.
-        if (_connectFailed)
+        if (hadEndpoint)
+        {
+            if (_endpoint!.IsStillDefault())
+                return true;
+
+            // The default device moved: a Bluetooth headset connected, or a USB DAC was
+            // unplugged. The endpoint held here still describes the device that was default
+            // when it was opened, so writing to it moves a device nobody is listening to. It
+            // is dropped and the new default is opened in its place.
+            //
+            // This is the whole of the defect behind "the volume slider only changes one
+            // output". The keys were never wrong - they go to whatever is default *now* - but
+            // every read and every absolute write went to whatever was default *then*, so
+            // after a headset connected the phone moved the speakers while the headset was
+            // the one in someone's ears.
+            _endpoint.Release();
+            _endpoint = null;
+        }
+        else if (_connectFailed)
+        {
+            // Latched rather than retried. Inside a service this fails forever and
+            // identically, so retrying it on every poll is a warning line in the log every
+            // three seconds for a fact that does not change.
+            //
+            // Only latched on a *first* attempt. An endpoint that was open and then went
+            // away can come back, and latching on a device swap would leave volume dead
+            // until the process was restarted.
             return false;
+        }
 
         _endpoint = CoreAudioEndpoint.TryOpen();
 
         if (_endpoint is null)
         {
-            _connectFailed = true;
-            log.LogWarning(
-                "Core Audio gave this process no default render endpoint, so the volume cannot " +
-                "be read back. Expected inside the Windows service (session 0); the session " +
-                "agent reads the volume on its behalf.");
+            if (!hadEndpoint)
+            {
+                _connectFailed = true;
+                log.LogWarning(
+                    "Core Audio gave this process no default render endpoint, so the volume " +
+                    "cannot be read back. Expected inside the Windows service (session 0); " +
+                    "the session agent reads the volume on its behalf.");
+            }
+
             return false;
         }
 

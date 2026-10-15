@@ -226,6 +226,35 @@ if (-not $SkipPublish) {
     $apk = Join-Path $root '..\android-app\esi_remote\build\app\outputs\flutter-apk\app-release.apk'
     if (Test-Path $apk) {
         Write-Host 'Android package' -ForegroundColor Cyan
+
+        # A stale APK passes every check below without complaint.
+        #
+        # `flutter analyze` and `flutter test` are green on sources the package was never
+        # built from, and the installability checks are about the package's shape rather
+        # than its contents. So a package left over from an earlier build reports nine green
+        # checks over code that is no longer in the tree, and nothing here can tell the
+        # difference.
+        #
+        # It is the installer problem further down this file, arrived at from the other side:
+        # there the cycle ran against a binary left over from the day before, so the fix was
+        # to rebuild inside the step. Here the fix is to refuse, because rebuilding an APK is
+        # several minutes of work this script has no business doing unasked - but shipping
+        # one silently is worse than not shipping one.
+        $flutterRoot = Join-Path $root '..\android-app\esi_remote'
+        $newestSource = (Get-Item (Join-Path $flutterRoot 'pubspec.yaml')).LastWriteTimeUtc
+        $libNewest = Get-ChildItem -Path (Join-Path $flutterRoot 'lib') -Recurse -File |
+            Measure-Object -Property LastWriteTimeUtc -Maximum
+        if ($libNewest.Maximum -and $libNewest.Maximum -gt $newestSource) {
+            $newestSource = $libNewest.Maximum
+        }
+
+        if ((Get-Item $apk).LastWriteTimeUtc -lt $newestSource) {
+            throw ("The APK at $apk is older than the Dart sources it is supposed to " +
+                   "contain, so the nine checks below would describe a package that does " +
+                   "not have the current code in it. Build it first: `flutter build apk " +
+                   "--release --no-pub` in $flutterRoot.")
+        }
+
         $checker = Join-Path $root 'tools\install-check\esi-install-check.csproj'
         & $dotnetExe run --project $checker -- $apk --nologo
         if ($LASTEXITCODE -ne 0) {

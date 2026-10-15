@@ -271,7 +271,7 @@ public sealed class ProcessInfoDto
     [JsonPropertyName("pid")] public int Pid { get; set; }
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("user")] public string? User { get; set; }
-    [JsonPropertyName("cpuPercent")] public double CpuPercent { get; set; }
+    [JsonPropertyName("cpuPercent")] public double? CpuPercent { get; set; }
     [JsonPropertyName("workingSetBytes")] public long WorkingSetBytes { get; set; }
     [JsonPropertyName("isElevated")] public bool IsElevated { get; set; }
     [JsonPropertyName("startedAt")] public long? StartedAt { get; set; }

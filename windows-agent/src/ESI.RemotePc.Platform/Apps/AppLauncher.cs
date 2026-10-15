@@ -27,6 +27,24 @@ public sealed record LaunchOutcome(bool Launched, int? ProcessId, string RunAs, 
 /// </summary>
 public sealed class AppLauncher(ILogger<AppLauncher> log, ISessionAgentBridge sessionAgent)
 {
+    /// <summary>
+    /// How long the last sample of a process that has gone away is kept, in milliseconds.
+    /// </summary>
+    private const long SampleRetentionMs = 5 * 60 * 1000;
+
+    /// <summary>
+    /// The last total processor time seen for each process id, and the monotonic reading it
+    /// was taken at.
+    /// </summary>
+    /// <para>
+    /// CPU per process is a difference between two observations, so this table is the first
+    /// half of that difference. Keyed by pid, which Windows recycles - see
+    /// <see cref="SampleCpuPercent"/> for how a recycled id is told apart from a real one.
+    /// </para>
+    private readonly Dictionary<int, (long Ticks, long At)> _cpuSeen = new();
+
+    private readonly object _cpuGate = new();
+
     /// <summary>Launches an application according to its configured run context.</summary>
     public LaunchOutcome Launch(AppLaunchSpec spec)
     {
@@ -310,9 +328,9 @@ public sealed class AppLauncher(ILogger<AppLauncher> log, ISessionAgentBridge se
     }
 
     /// <summary>Lists running processes, optionally filtered to those a launcher entry matches.</summary>
-    public List<(int Pid, string Name, long WorkingSet, DateTime? StartedAt)> ListRunning(string? onlyProcessName = null)
+    public List<(int Pid, string Name, long WorkingSet, DateTime? StartedAt, double? CpuPercent)> ListRunning(string? onlyProcessName = null)
     {
-        var result = new List<(int, string, long, DateTime?)>();
+        var result = new List<(int, string, long, DateTime?, double?)>();
 
         Process[] processes;
         try
@@ -341,7 +359,7 @@ public sealed class AppLauncher(ILogger<AppLauncher> log, ISessionAgentBridge se
                         continue;
                     }
 
-                    result.Add((process.Id, name, process.WorkingSet64, SafeStartTime(process)));
+                    result.Add((process.Id, name, process.WorkingSet64, SafeStartTime(process), SampleCpuPercent(process)));
                 }
                 catch
                 {
@@ -350,7 +368,106 @@ public sealed class AppLauncher(ILogger<AppLauncher> log, ISessionAgentBridge se
             }
         }
 
+        PruneCpuSamples();
+
         return result;
+    }
+
+    /// <summary>
+    /// The process's share of the machine as a percentage of every core, 0-100, or null when
+    /// it has only been seen once.
+    /// </summary>
+    /// <para>
+    /// CPU per process is a <i>rate</i>, not a reading. It is the change in that process's own
+    /// processor time divided by the change in wall time, so a single observation cannot
+    /// produce it at all - there is nothing yet to divide. The first listing of a process
+    /// therefore reports null and the second reports a real number, which is why the screen's
+    /// CPU column fills in on a refresh rather than arriving complete.
+    /// </para>
+    /// <para>
+    /// Reporting null rather than 0 matters: 0 means "idle", and an idle process that is
+    /// actually saturating a core is exactly the thing this column exists to find. The DTO has
+    /// no room for an absent number, so the wire carries 0 and the app's own "no reading yet"
+    /// state is what decides between the two - a first sample is not evidence of idleness.
+    /// </para>
+    private double? SampleCpuPercent(Process process)
+    {
+        long used;
+        try
+        {
+            used = process.TotalProcessorTime.Ticks;
+        }
+        catch
+        {
+            // A process we cannot open the token for. It is listed without a CPU figure, which
+            // is what the same call has always done for processes that exit mid-walk.
+            return null;
+        }
+
+        var now = Environment.TickCount64;
+        var pid = process.Id;
+
+        lock (_cpuGate)
+        {
+            if (!_cpuSeen.TryGetValue(pid, out var previous))
+            {
+                _cpuSeen[pid] = (used, now);
+                return null;
+            }
+
+            var elapsedMs = now - previous.At;
+
+            // Windows recycles process ids, so a total that went backwards is not the same
+            // process slowing down - it is a different one wearing the number.
+            if (elapsedMs <= 0 || used < previous.Ticks)
+            {
+                _cpuSeen[pid] = (used, now);
+                return null;
+            }
+
+            _cpuSeen[pid] = (used, now);
+
+            var cpuSeconds = (used - previous.Ticks) / (double)TimeSpan.TicksPerSecond;
+            var wallSeconds = elapsedMs / 1000.0;
+            var percent = cpuSeconds / wallSeconds / (double)Environment.ProcessorCount * 100.0;
+
+            return Math.Clamp(percent, 0, 100);
+        }
+    }
+
+    /// <summary>
+    /// Drops the last sample of processes that have gone away, so a long-lived agent does not
+    /// accumulate an entry for every pid it has ever seen.
+    /// </summary>
+    /// <para>
+    /// Only walked once the table is large, because this runs once per listing and a machine
+    /// with a few hundred processes would otherwise pay for a cleanup on every request.
+    /// </para>
+    private void PruneCpuSamples()
+    {
+        lock (_cpuGate)
+        {
+            if (_cpuSeen.Count <= 256)
+            {
+                return;
+            }
+
+            var cutoff = Environment.TickCount64 - SampleRetentionMs;
+            var stale = new List<int>();
+
+            foreach (var pair in _cpuSeen)
+            {
+                if (pair.Value.At < cutoff)
+                {
+                    stale.Add(pair.Key);
+                }
+            }
+
+            foreach (var pid in stale)
+            {
+                _cpuSeen.Remove(pid);
+            }
+        }
     }
 
     private static DateTime? SafeStartTime(Process process)

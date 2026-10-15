@@ -275,6 +275,9 @@ class EsiWebSocket implements EsiWebSocketHandle {
   }
 
   @override
+  Stream<AudioState> get audioStates => _frames.stream.audioStates;
+
+  @override
   void sendInput(Map<String, dynamic> input) {
     send(EsiWsFrame.remoteInput(
       'i${DateTime.now().microsecondsSinceEpoch}',
@@ -358,6 +361,13 @@ abstract class EsiWebSocketHandle {
 
   /// Stops the PC streaming its audio.
   void stopAudio();
+
+  /// The PC's answer to [startAudio] and [stopAudio].
+  ///
+  /// On the handle rather than reached through the frame stream, so the state layer can wait
+  /// for one without importing the socket's whole surface. Without it the phone cannot tell
+  /// "the PC is capturing" from "the PC said no and there is nothing to hear".
+  Stream<AudioState> get audioStates;
 }
 
 /// Typed convenience wrappers over the raw frame JSON, so screens do not hand-build maps.
@@ -380,6 +390,17 @@ extension EsiWsStream on Stream<EsiWsFrame> {
 
   Stream<GamingState> get gamingStates => where((f) => f.type == 'gaming').map(
         (f) => GamingState.fromJson(f.data ?? const <String, dynamic>{}),
+      );
+
+  /// Whether the PC accepted the request to capture its own audio (§7.2).
+  ///
+  /// `active` is the PC's answer about *delivering* the request, not a promise that sound
+  /// will follow - WASAPI opens asynchronously and can refuse afterwards. It is still worth
+  /// waiting for, because a refusal the PC does report is the difference between "the
+  /// session agent is not running" and a switch that sits on over silence with nothing
+  /// anywhere saying why.
+  Stream<AudioState> get audioStates => where((f) => f.type == 'audio.state').map(
+        (f) => AudioState.fromJson(f.data ?? const <String, dynamic>{}),
       );
 
   Stream<EsiWsError> get errors =>

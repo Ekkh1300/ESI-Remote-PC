@@ -282,6 +282,9 @@ class _RunningTab extends ConsumerStatefulWidget {
 }
 
 class _RunningTabState extends ConsumerState<_RunningTab> {
+  /// What the list is ordered by. Starts on CPU because that is the reading this screen
+  /// exists to show; the chips beside "All processes" change it.
+  ProcessSort _sort = ProcessSort.cpu;
 
   @override
   Widget build(BuildContext context) {
@@ -341,10 +344,15 @@ class _RunningTabState extends ConsumerState<_RunningTab> {
             for (final option in ProcessSort.values)
               Padding(
                 padding: const EdgeInsets.only(left: EsiSpace.xs),
-                child: EsiTag(
-                  label: option.label,
-                  colour: ProcessSort.cpu == option ? EsiPalette.signal : EsiPalette.faint,
-                  filled: ProcessSort.cpu == option,
+                child: InkWell(
+                  borderRadius: EsiRadius.tag,
+                  onTap: () => setState(() => _sort = option),
+                  child: EsiTag(
+                    label: option.label,
+                    colour: _sort == option ? EsiPalette.signal : EsiPalette.faint,
+                    filled: _sort == option,
+                    tooltip: 'Order by ${option.label.toLowerCase()}',
+                  ),
                 ),
               ),
           ],
@@ -365,7 +373,7 @@ class _RunningTabState extends ConsumerState<_RunningTab> {
                 body: 'The agent returned an empty list.',
               );
             }
-            final sorted = ProcessSort.cpu.apply(list);
+            final sorted = _sort.apply(list);
             return EsiSurface(
               tint: EsiPalette.hull,
               opacity: 0.5,
@@ -397,7 +405,17 @@ enum ProcessSort {
   List<ProcessInfo> apply(List<ProcessInfo> input) {
     final copy = <ProcessInfo>[...input];
     copy.sort(switch (this) {
-      ProcessSort.cpu => (a, b) => b.cpuPercent.compareTo(a.cpuPercent),
+      // A process with no reading yet has been listed once, which says nothing about how
+      // hard it is working. It sorts last rather than first: "not measured" is not "idle",
+      // and it is certainly not "busiest".
+      ProcessSort.cpu => (a, b) {
+          final aCpu = a.cpuPercent;
+          final bCpu = b.cpuPercent;
+          if (aCpu == null && bCpu == null) return 0;
+          if (aCpu == null) return 1;
+          if (bCpu == null) return -1;
+          return bCpu.compareTo(aCpu);
+        },
       ProcessSort.memory => (a, b) => b.workingSetBytes.compareTo(a.workingSetBytes),
       ProcessSort.name => (a, b) =>
           a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -413,7 +431,8 @@ class _ProcessRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final severity = severityForPercent(process.cpuPercent, elevated: 25, critical: 60);
+    final cpu = process.cpuPercent;
+    final severity = severityForPercent(cpu ?? 0, elevated: 25, critical: 60);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: EsiSpace.md, vertical: EsiSpace.sm),
       child: Row(
@@ -446,9 +465,14 @@ class _ProcessRow extends ConsumerWidget {
                   ],
                 ),
                 Text(
-                  '${formatPercent(process.cpuPercent, decimals: 1)} CPU · '
-                  '${formatBytes(process.workingSetBytes)}'
-                  '${process.user != null ? ' · ${process.user}' : ''}',
+                  // The agent needs two listings to measure a rate, so the first one carries
+                  // no figure at all. Saying so is the difference between "this has not been
+                  // measured yet" and a confident 0.0% that reads as a machine at rest.
+                  cpu == null
+                      ? 'measuring… · ${formatBytes(process.workingSetBytes)}'
+                      : '${formatPercent(cpu, decimals: 1)} CPU · '
+                            '${formatBytes(process.workingSetBytes)}'
+                            '${process.user != null ? ' · ${process.user}' : ''}',
                   style: EsiType.mono.copyWith(fontSize: 10),
                 ),
               ],
@@ -457,7 +481,7 @@ class _ProcessRow extends ConsumerWidget {
           const SizedBox(width: EsiSpace.sm),
           SizedBox(
             width: 54,
-            child: EsiBar(fraction: process.cpuPercent / 100, severity: severity, height: 3),
+            child: EsiBar(fraction: (cpu ?? 0) / 100, severity: severity, height: 3),
           ),
           const SizedBox(width: EsiSpace.sm),
           EsiIconAction(

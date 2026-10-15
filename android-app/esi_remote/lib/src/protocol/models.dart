@@ -961,7 +961,7 @@ class ProcessInfo {
         pid: asInt(json['pid']),
         name: asString(json['name']),
         user: asStringOrNull(json['user']),
-        cpuPercent: asDouble(json['cpuPercent']),
+        cpuPercent: asDoubleOrNull(json['cpuPercent']),
         workingSetBytes: asInt(json['workingSetBytes']),
         isElevated: asBool(json['isElevated']),
         startedAt: asIntOrNull(json['startedAt']),
@@ -970,7 +970,12 @@ class ProcessInfo {
   final int pid;
   final String name;
   final String? user;
-  final double cpuPercent;
+  /// The process's share of every core, 0-100, or null when the agent has only seen it once.
+  ///
+  /// A rate needs two observations, so the first listing of a process cannot carry one. Null
+  /// rather than zero because zero means idle, and idle is the one claim this column exists
+  /// to rule out.
+  final double? cpuPercent;
   final int workingSetBytes;
   final bool isElevated;
   final int? startedAt;
@@ -1491,6 +1496,24 @@ class MediaActionResult {
   final String action;
   final int? volume;
   final bool? isMuted;
+  final String? detail;
+}
+
+/// The PC's answer to `audio.start` and `audio.stop` (§7.2), delivered on `audio.state`.
+///
+/// `active` is what the PC said about *delivering* the request, not a promise that sound
+/// will arrive - the capture device opens asynchronously and can still refuse afterwards.
+/// It is worth reading anyway: the refusal it does report is how the phone learns that no
+/// session agent is running, which no amount of waiting for samples would reveal.
+class AudioState {
+  const AudioState({required this.active, this.detail});
+
+  factory AudioState.fromJson(Map<String, dynamic> json) => AudioState(
+        active: asBool(json['active']),
+        detail: asStringOrNull(json['detail']),
+      );
+
+  final bool active;
   final String? detail;
 }
 

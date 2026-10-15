@@ -14,8 +14,8 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  D647CD221C8C5CD4D27809C454DD05D635F17034AA46B7E39BEA6BDBED909B09
-ESI-RemotePC-1.0.1.apk             F677CB71E2DDB957AC9CB4261F6C51DDE29B139770151165629F48EABC4C2CC3
+ESI-RemotePC-Setup-1.0.1-x64.exe  4AF8440271C8EFC17767072376D0DD514FD22CA7B625E4D3E2EFB5E6E831B0DC
+ESI-RemotePC-1.0.1.apk             B41153F0AE40DFA68A58AEDD442AEE1310E6863D263BB838BAB0905E6FCEB83A
 ```
 
 Both hashes change whenever their side of the project changes, and this build changed both: the
@@ -25,7 +25,7 @@ above is the current one, and the two files in this directory always agree with 
 
 ## What this build fixes
 
-Nine, each measured rather than suspected.
+Thirteen, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -106,6 +106,34 @@ seconds too large, which is exactly the number the phone printed. The file scree
 certificate's validity window carried it too. Pinned by asking a booted agent for a real
 timestamp and comparing it against the clock it was built with - reading the arithmetic does not
 say which epoch is meant, which is how it survived this long.
+
+**The volume slider moved one output, and not the one you were hearing.** It changed exactly one
+device's volume and never noticed when that stopped being the device you were listening to.
+Connect a Bluetooth headset and Windows makes it the default - but the phone kept writing to the
+speakers it had found when it first connected, so you moved the speakers and heard nothing
+change. The volume *keys* were never wrong, which is why it looked like a Bluetooth problem
+rather than a stale-handle one. The endpoint now records which device it opened and re-opens the
+default whenever that changes, and the failure is latched only on a first attempt so one
+unplugged cable cannot leave volume dead until the PC is restarted.
+
+**The CPU column was always zero.** The agent never sent `cpuPercent` - the field is in the
+contract and nothing filled it in. The phone read the absent value as `0`, so every process on a
+machine running them flat out read `0.0% CPU`. A usage column that always reads zero is worse
+than no usage column, because it reads as an answer instead of as a missing one. CPU per process
+is a *rate*, so a process seen once has no figure yet; it now carries **no figure** rather than
+a zero, and the second listing has real numbers.
+
+**The sort chips did nothing.** `CPU`, `Memory` and `Name` were drawn as status tags, not buttons:
+no tap handler on any of them, and the highlighted one hard-coded rather than derived from
+anything. Tapping now reorders the list, and a process with no reading yet sorts last rather
+than first - "not measured" is not "busiest".
+
+**The speaker switch said on, over silence.** The PC answers `audio.start` with an `audio.state`
+frame saying whether it accepted, and nothing on the phone was listening for it. The switch
+reported success the moment the *phone's* track opened - which happens whether or not the PC is
+capturing anything. So a PC that had refused, for want of a running session agent, played silence
+under a control reading **on**: indistinguishable from a broken codec. It now waits for the
+answer, and a refusal is reported instead of hidden.
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only
@@ -277,9 +305,9 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 426 unit and integration
+**Verified by running it.** The Windows build is green end to end: 429 unit and integration
 tests, 19 live probes against a booted agent, and a real install â†' serve â†' uninstall cycle
-that was repeated from the delivered installer file. The Android side is 300 Dart tests, and
+that was repeated from the delivered installer file. The Android side is 309 Dart tests, and
 â€" the part that matters â€" a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
