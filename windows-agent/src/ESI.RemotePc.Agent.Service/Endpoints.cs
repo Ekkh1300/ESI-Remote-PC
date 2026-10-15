@@ -587,7 +587,7 @@ public static class Endpoints
                     Pid = p.Pid,
                     Name = p.Name,
                     WorkingSetBytes = p.WorkingSet,
-                    StartedAt = p.StartedAt?.ToUniversalTime().Ticks / TimeSpan.TicksPerSecond,
+                    StartedAt = UnixTime.Seconds(p.StartedAt),
                 })
                 .ToList();
 

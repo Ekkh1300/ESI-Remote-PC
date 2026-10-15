@@ -243,7 +243,7 @@ public sealed class AppService(
                 AppId = match.Id,
                 ProcessId = process.Pid,
                 Name = process.Name,
-                StartedAt = process.StartedAt?.ToUniversalTime().Ticks / TimeSpan.TicksPerSecond,
+                StartedAt = UnixTime.Seconds(process.StartedAt),
                 WorkingSetBytes = process.WorkingSet,
             });
         }

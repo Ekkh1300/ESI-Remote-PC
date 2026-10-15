@@ -440,7 +440,7 @@ public sealed class FileService(
             command.Parameters.AddWithValue("$name", Path.GetFileName(path));
             command.Parameters.AddWithValue("$dir", AgentDatabase.ToDbBool(isDirectory));
             command.Parameters.AddWithValue("$size", size);
-            command.Parameters.AddWithValue("$modified", isDirectory ? 0 : File.GetLastWriteTimeUtc(path).Ticks / TimeSpan.TicksPerSecond);
+            command.Parameters.AddWithValue("$modified", isDirectory ? 0 : UnixTime.Seconds(File.GetLastWriteTimeUtc(path)) ?? 0);
             command.Parameters.AddWithValue("$now", AgentDatabase.NowUnix());
             command.ExecuteNonQuery();
         }
@@ -466,8 +466,11 @@ public sealed class FileService(
             Path = path,
             IsDirectory = isDirectory,
             SizeBytes = isDirectory ? 0 : ((FileInfo)info).Length,
-            LastModified = info.LastWriteTimeUtc.Ticks / TimeSpan.TicksPerSecond,
-            Created = info.CreationTimeUtc.Ticks / TimeSpan.TicksPerSecond,
+            // `?? 0` only for the non-nullable one. Zero is the value the app already reads
+            // as "not reported", so a conversion that somehow failed would say so rather
+            // than print a date 1,970 years out.
+            LastModified = UnixTime.Seconds(info.LastWriteTimeUtc) ?? 0,
+            Created = UnixTime.Seconds(info.CreationTimeUtc),
             IsHidden = (info.Attributes & FileAttributes.Hidden) != 0,
             IsReadOnly = readOnly || (info.Attributes & FileAttributes.ReadOnly) != 0,
             ChildCount = isDirectory ? childCount : null,

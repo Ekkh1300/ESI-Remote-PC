@@ -14,7 +14,7 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  A2A30EECE6D2E7187BDFF9A9AA663A66581A1E3A93D6130F94671DC1A51073DB
+ESI-RemotePC-Setup-1.0.1-x64.exe  D647CD221C8C5CD4D27809C454DD05D635F17034AA46B7E39BEA6BDBED909B09
 ESI-RemotePC-1.0.1.apk             F677CB71E2DDB957AC9CB4261F6C51DDE29B139770151165629F48EABC4C2CC3
 ```
 
@@ -25,7 +25,7 @@ above is the current one, and the two files in this directory always agree with 
 
 ## What this build fixes
 
-Eight, each measured rather than suspected.
+Nine, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -96,6 +96,16 @@ The agent requires a ticket on that route *exactly*, so an ordinary photo came b
 upload ticket is required" while an 80 MB video went through. There is one path now, and it is
 the one the endpoint accepts. A test drives both sides of the old 8 MiB boundary and fails
 against the code as it shipped.
+
+**Every timestamp the PC sent was 1,970 years out.** A process showed up as "started in
+17259887 h". Seven places on the agent divided .NET ticks by `TicksPerSecond`, which counts from
+0001-01-01; the wire has always said Unix epoch, and every other timestamp in the agent - the
+boot time, the power state, the audit trail, every WebSocket frame - already used it. The
+result is a positive `long` that deserialises happily and is simply not a timestamp, 62,135,596,800
+seconds too large, which is exactly the number the phone printed. The file screen's dates and the
+certificate's validity window carried it too. Pinned by asking a booted agent for a real
+timestamp and comparing it against the clock it was built with - reading the arithmetic does not
+say which epoch is meant, which is how it survived this long.
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only
@@ -267,7 +277,7 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 423 unit and integration
+**Verified by running it.** The Windows build is green end to end: 426 unit and integration
 tests, 19 live probes against a booted agent, and a real install â†' serve â†' uninstall cycle
 that was repeated from the delivered installer file. The Android side is 300 Dart tests, and
 â€" the part that matters â€" a live check that starts a throwaway agent and drives the app's

@@ -1127,6 +1127,118 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
     }
 
     // ===============================================================================
+    // Timestamps
+    // ===============================================================================
+
+    /// <summary>
+    /// Every timestamp the agent puts on the wire is Unix epoch seconds.
+    /// <para>
+    /// The defect this pins was 1,970 years wide. Seven call sites divided .NET ticks by
+    /// <c>TicksPerSecond</c>, which counts from 0001-01-01 rather than 1970-01-01, so the
+    /// number they sent looked like a timestamp and was not one. The phone rendered a
+    /// process's start time as <c>started in 17259887 h</c> - that figure is the epoch gap
+    /// itself, 62,135,593,200 seconds.
+    /// </para>
+    /// <para>
+    /// Nothing about the wrong value is implausible to a type check: it is a positive long
+    /// and it deserialises. And no amount of reading the arithmetic says which epoch is
+    /// meant, which is why three earlier attempts to read this code passed over it. The only
+    /// test that catches it asks the running agent for a real timestamp and compares it to
+    /// the clock it was built with.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Process_start_times_are_unix_epoch_seconds()
+    {
+        var response = await SendSignedAsync(HttpMethod.Get, "/api/v1/system/processes?limit=10");
+        var body = await ReadAsync(response);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var document = JsonDocument.Parse(body);
+        var processes = document.RootElement.GetProperty("processes");
+        Assert.True(processes.GetArrayLength() > 0, "an empty list proves nothing about the units");
+
+        // Anything started after 2020 is plausible; the buggy value is a century beyond the
+        // top of the range and a negative one would be before the epoch itself.
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var checkedAny = false;
+
+        foreach (var process in processes.EnumerateArray())
+        {
+            var startedAt = process.GetProperty("startedAt");
+            if (startedAt.ValueKind == JsonValueKind.Null)
+            {
+                // Protected processes do not report a start time, and null is a honest
+                // answer. It is the number that has to be right.
+                continue;
+            }
+
+            checkedAny = true;
+            Assert.InRange(startedAt.GetInt64(), 1_600_000_000, now + 60);
+        }
+
+        Assert.True(checkedAny, "no process on this machine reported a start time");
+    }
+
+    [Fact]
+    public async Task A_file_listing_reports_its_dates_as_unix_epoch_seconds()
+    {
+        var response = await SendSignedAsync(HttpMethod.Get, "/api/v1/files/list");
+        var body = await ReadAsync(response);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var checkedAny = false;
+
+        using var document = JsonDocument.Parse(body);
+        foreach (var entry in document.RootElement.GetProperty("entries").EnumerateArray())
+        {
+            checkedAny = true;
+
+            var lastModified = entry.GetProperty("lastModified").GetInt64();
+            Assert.InRange(lastModified, 1_600_000_000, now + 60);
+
+            var created = entry.GetProperty("created");
+            if (created.ValueKind != JsonValueKind.Null)
+            {
+                Assert.InRange(created.GetInt64(), 1_600_000_000, now + 60);
+            }
+        }
+
+        Assert.True(checkedAny, "the sandbox listing was empty");
+    }
+
+    [Fact]
+    public async Task The_handshake_reports_certificate_dates_as_unix_epoch_seconds()
+    {
+        // Unauthenticated, so this one is reachable before any pairing exists.
+        var response = await Client.GetAsync("/api/v1/handshake");
+        var body = await ReadAsync(response);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        var notBefore = root.GetProperty("notBefore");
+        if (notBefore.ValueKind != JsonValueKind.Null)
+        {
+            Assert.InRange(notBefore.GetInt64(), 1_600_000_000, now + 60);
+        }
+
+        var notAfter = root.GetProperty("notAfter");
+        if (notAfter.ValueKind != JsonValueKind.Null)
+        {
+            // Still in the future, and short of 2100. The buggy value lands in 3970.
+            Assert.InRange(notAfter.GetInt64(), now - 60, 4_102_444_800);
+        }
+    }
+
+    // ===============================================================================
     // The client side of the protocol, written from the spec
     // ===============================================================================
 

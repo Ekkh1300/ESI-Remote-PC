@@ -139,6 +139,18 @@ The four screens that read those lists also swallowed the failure: a request tha
 back as an empty list, which is the same picture as a machine with nothing to report. They now
 say what happened. *(D65)*
 
+**Every timestamp the PC sent was 1,970 years out.** A process's start time arrived as
+`started in 17259887 h` — and that figure is not a random overflow, it is the distance between
+the two epochs: 62,135,596,800 seconds. Seven places on the agent divided .NET ticks by
+`TicksPerSecond`, which counts from 0001-01-01, while the wire has always said Unix epoch and
+every other timestamp in the agent — the power state, the boot time, the audit trail, every
+WebSocket frame — already used it. The wrong number is a positive `long` that deserialises
+happily, so nothing failed; it was simply not a timestamp. Fixed in one place that the rest now
+call, and pinned by asking the running agent for a real timestamp and comparing it to the clock
+it was built with — reading the arithmetic three times over does not say which epoch is meant.
+The file screen's dates and the certificate's validity window carried the same defect and are
+fixed with it. *(D69)*
+
 ## The dashboard's usage graph
 
 **The graph was there, and said nothing about why it was blank.** The Load panel's trace always
@@ -225,7 +237,7 @@ handset.
 
 ## Verification
 
-- 423 C# tests, 300 Dart tests, all passing
+- 426 C# tests, 300 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
