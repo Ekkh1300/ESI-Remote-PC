@@ -940,26 +940,26 @@ on the pairing screen, then Paired. Every signed endpoint the app touched afterw
 dashboard reported Live, the Power tab reported online - E-K\META PC, and the Apps tab listed
 the catalog. No scan, no camera, one click on the PC.
 
-189 C# tests, 165 Dart tests, lutter analyze clean, publish smoke test 19 of 19. 
-elease\
-holds exactly one .exe and one .apk and both hashes match this file. The three installed
-binaries are byte-identical to the shipped build.
+189 C# tests, 165 Dart tests, flutter analyze clean, publish smoke test 19 of 19.
+The `release\` folder holds exactly one .exe and one .apk and both hashes match this file.
+The three installed binaries are byte-identical to the shipped build.
 
-One device is still paired: 26aa882c6b329fd, the emulator that ran this. It cannot
+One device is still paired: a26aa882c6b329fd, the emulator that ran this. It cannot
 authenticate from anywhere real, and seven of the eight slots are free. To remove it:
 stop the agent, esirc pair revoke a26aa882c6b329fd, start it again.
+
 ## 1.0.1
 
 The version now lives in one place per artifact and is checked against each other. Directory.Build.props
 carries <Version>, which is what the assembly stamps and what the handshake reports; the installer takes
-AppVersion from its own .iss, which names the setup EXE. Nothing connected the two, so uild.ps1 now
+AppVersion from its own .iss, which names the setup EXE. Nothing connected the two, so build.ps1 now
 reads both and refuses to build on a mismatch - a setup.exe that says 1.0.1 beside an agent that reports 1.0.0
 is exactly the sort of thing nobody notices until somebody calls for support. Verified by making them differ
 and watching the build stop.
 
 Also raised: the two 1.0.0 fallbacks in AgentHost.ReadVersion and SettingsStore.Version, and the version
-the app reports in its pairing request. The APK was rebuilt and read back with apt2, which reports
-ersionName='1.0.1' versionCode='2' - checked in the artifact rather than assumed from pubspec.yaml.
+the app reports in its pairing request. The APK was rebuilt and read back with aapt2, which reports
+versionName='1.0.1' versionCode='2' - checked in the artifact rather than assumed from pubspec.yaml.
 
 Pairing does not need a QR code in this version. The phone creates its own one-time secret and sends it with
 the request, so the sequence is **Pair, check the code matches, Allow this device**.
