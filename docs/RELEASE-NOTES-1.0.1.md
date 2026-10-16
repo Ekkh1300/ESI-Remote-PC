@@ -376,6 +376,31 @@ that name, which is evidence rather than a guarantee — a process could exist w
 having started it. It is the same signal a person would use by eye, and a stronger one than the
 SCM was giving.
 
+## The delivery document
+
+**`release/README.md` had 124 mangled characters in it, and had had them since it was written.**
+Every non-ASCII character in it was a UTF-8 sequence that had been read as Windows-1252 and
+written back out as UTF-8, so one character had become three. The install instructions read
+`Start menu â†' *Uninstall ESI Remote PC*`, and the verification section read `a real install â†'
+serve â†' uninstall cycle`. `docs/ROADMAP.md` had the same thing twice over, inside a second
+encoding layer. *(D78)*
+
+Two things made the repair worth doing carefully rather than quickly. A plain "undo the double
+encoding" pass fixes the ordinary runs and **silently drops** the ones whose trailing quote byte
+had been normalised along the way — it turned `install → serve` into `install  serve`, an arrow
+with nothing in it, which is a worse version of the same defect. And the one multiplication sign
+in the roadmap reads, to the eye, like a stray letter in front of a dash; deleting that letter —
+the obvious repair — yields "a fixed window gives a client 2- the budget" where the text means
+*twice* the budget.
+
+The whole tree was scanned, not just the two files; the only other hit was a compressed byte pair
+inside a PNG. The repaired text was read back as English rather than merely checked to be free of
+bad bytes, and both files kept their line counts, their CRLF endings and their lack of a BOM.
+
+**This ships in the next prerelease, not this one.** The tag for this release points at the commit
+before the fix, because the two binaries on it are byte-identical either way and moving a
+published tag to fix a documentation file is a worse trade than leaving it. `master` is correct.
+
 ---
 
 ## The build
