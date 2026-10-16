@@ -15,17 +15,21 @@ SHA-256:
 
 ```
 ESI-RemotePC-Setup-1.0.1-x64.exe  0A95293CC6EF367CDB50DF083D9AE4D08FD8B8D14534CD499976803C655C18FB
-ESI-RemotePC-1.0.1.apk             B41153F0AE40DFA68A58AEDD442AEE1310E6863D263BB838BAB0905E6FCEB83A
+ESI-RemotePC-1.0.1.apk             45EDE4278F43756CC418EEF79F0567545E112C574ACD9C78C3C75ABC99213850
 ```
 
-Both hashes change whenever their side of the project changes, and this build changed both: the
-app got the navigation and file fixes below, and the agent got the capture and input ones. If you
-downloaded an earlier copy of either file it will not match, and that is expected - the block
-above is the current one, and the two files in this directory always agree with it.
+Both hashes change whenever their side of the project changes. If you downloaded an earlier copy of
+either file it will not match, and that is expected - the block above is the current one, and the
+two files in this directory always agree with it.
+
+The installer has been unchanged since prerelease 6 and the app has not: D76 below is entirely in
+Dart, so only the APK's hash moved. The installer is byte-identical to the one on `audio.6` rather
+than re-packed, because nothing in C# changed and a fresh pack would only have altered the
+timestamps Inno Setup stamps into it.
 
 ## What this build fixes
 
-Sixteen, each measured rather than suspected.
+Seventeen, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -134,6 +138,19 @@ reported success the moment the *phone's* track opened - which happens whether o
 capturing anything. So a PC that had refused, for want of a running session agent, played silence
 under a control reading **on**: indistinguishable from a broken codec. It now waits for the
 answer, and a refusal is reported instead of hidden.
+
+**A stop's answer in flight was taken as the start's.** Found while re-reading that fix: the PC
+answers `audio.stop` on the **same `audio.state` type**, with `active: false`, and the phone
+filtered the stream on type alone. So tapping Stop and then Play quickly enough - which the label
+changing instantly invites - left the stop's answer travelling when the start attached its
+listener, and `.first` took it as the answer to the start. The phone reported *"The PC refused to
+capture its audio"* about a start the PC had in fact just accepted, and left that capture running
+for a phone which, having been told the opposite, now refuses to play. Both halves are false and
+neither shows up anywhere else. The request id was on the wire the whole time and the PC echoes it
+back on every answer; the phone was generating it, sending it, and throwing it away. It mints the
+id before subscribing now, and a reply naming a *different* request is somebody else's answer - but
+a reply naming no id is still taken, so an agent that does not echo one does not lose the refusal
+it is trying to report.
 
 **The tray's Exit did nothing.** The item was wired and the agent really did shut down - and then
 the icon was back. The session agent is *supervised*: the service polls every three seconds and,

@@ -126,6 +126,27 @@ written, because a reply can arrive on the next turn of the event loop and a lis
 after the send would miss it and wait forever for a confirmation that had already been given.
 *(D72)*
 
+**And a stop's answer in flight was taken as the start's.** Found by re-reading that fix: the PC
+answers `audio.stop` on the **same `audio.state` type**, with `active: false`, and the listener
+above filtered on type alone. So tapping Stop and then Play quickly enough — which the label
+changing to "Play the PC here" the instant Stop is pressed actively invites — left the stop's
+answer still travelling when the start attached its listener, and `.first` took it as the answer
+to the start. The phone reported *"The PC refused to capture its audio"* about a start the PC had
+in fact just accepted, and left that capture running for a phone which, having been told the
+opposite, now refuses to play. Both halves of that are false, and neither shows up anywhere else.
+
+The request id was on the wire the whole time and the PC **echoes it back** on every answer; the
+phone was generating it, sending it, and then throwing it away. The listener mints the id *before*
+it subscribes — it cannot recognise an answer it has no id to match against — and `startAudio`
+takes it so it goes out on the wire. A reply naming a *different* request is somebody else's
+answer and is passed by; a reply naming **no** id is still taken, because an agent that does not
+echo one must not lose the refusal it is trying to report. Only a reply that positively names
+another request is disqualified. *(D76)*
+
+There is no longer an unqualified "every `audio.state`" getter beside the scoped one. It is the
+thing being protected against, and a getter nobody is supposed to call is only still sitting
+there to be called.
+
 **What is not claimed.** This has been verified by tests that pin the wire format to the PC
 encoder's own constants, and by building the native player into the APK — but not by listening
 to it. The emulator on the machine that built this will not boot, so the end-to-end path has
@@ -364,7 +385,7 @@ handset.
 
 ## Verification
 
-- 439 C# tests, 309 Dart tests, all passing
+- 439 C# tests, 310 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
@@ -373,6 +394,11 @@ handset.
   and release-APK build on every push — see `.github/workflows/ci.yml`
 - The audio wire format is pinned to the PC encoder's constants by `test/audio/audio_wire_test.dart`,
   and the native player is confirmed present in the built APK's dex
+- The speaker switch is measured end to end by `test/state/speaker_state_test.dart`, including the
+  stop's answer left in flight under the start's — removing the id filter from D76 makes it fail
+  with `Expected: on / Actual: failed`, the false refusal exactly
+- The tray's Exit decision and the order it shuts the icon down in are pinned by ten tests in
+  `SessionAgentStopTests.cs`, each run against the code as it shipped and failing there
 - The usage graph's whole path — PC history, snapshot, accumulated window, three channels,
   painter — is measured end to end by `test/state/metrics_history_test.dart`
 - Full screen is measured by `test/ui/fullscreen_test.dart`, including which widget answers a
