@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../audio/phone_speaker.dart';
+import '../net/esi_ws.dart';
 import '../protocol/models.dart';
 import 'connection.dart';
 
@@ -62,10 +63,21 @@ class SpeakerNotifier extends Notifier<SpeakerState> {
     // attached after the send can miss a confirmation that was already given - and then wait
     // forever for one.
     //
-    // No reply at all is not a failure. An agent too old to answer `audio.state` is also one
-    // that sends no audio, but the track still opens and whatever does arrive is played;
+    // The id is minted first for the same reason: the listener has to be able to recognise
+    // its own answer, and it cannot do that from an id it does not have yet.
+    //
+    // Matching on that id is not decoration. The PC answers `audio.stop` on this very same
+    // `audio.state` type with `active: false`, so tapping Stop and then Play quickly enough
+    // leaves the stop's answer in flight when the start subscribes. Taken unqualified it
+    // reads as a refusal of a start the PC had in fact just accepted - a false "The PC
+    // refused" over a capture that is running, and a PC left capturing for a phone that then
+    // refuses to play.
+    //
+    // No reply at all is still not a failure. An agent too old to answer `audio.state` is also
+    // one that sends no audio, but the track still opens and whatever does arrive is played;
     // where that silence comes from is the PC's business, not a reason to refuse the request.
-    final answer = socket.audioStates
+    final requestId = EsiWsFrame.newAudioRequestId();
+    final answer = socket.audioStateFor(requestId)
         .first
         .then<AudioState?>((value) => value)
         .timeout(
@@ -73,7 +85,7 @@ class SpeakerNotifier extends Notifier<SpeakerState> {
           onTimeout: () => null,
         );
 
-    socket.startAudio();
+    socket.startAudio(requestId);
 
     // This is the half that was missing. Without it the switch reported on the moment the
     // track opened, and a PC that had refused - no session agent running, another phone
