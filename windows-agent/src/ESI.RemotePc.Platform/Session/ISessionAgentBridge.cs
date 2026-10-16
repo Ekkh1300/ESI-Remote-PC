@@ -462,5 +462,17 @@ public static class SessionChannelProtocol
         public const string Heartbeat = "heartbeat";
         public const string AppStarted = "app.started";
         public const string AppExited = "app.exited";
+
+        /// <summary>
+        /// The agent is leaving because somebody asked it to from its own tray menu, rather
+        /// than because something went wrong.
+        /// <para>
+        /// The service supervises the session agent and starts one whenever a live session has
+        /// none. So an Exit that arrives only as a broken pipe is indistinguishable from a
+        /// crash: within three seconds the supervisor starts a new agent, the tray icon
+        /// returns, and the menu item appears to do nothing at all (D74).
+        /// </para>
+        /// </summary>
+        public const string AgentStop = "agent.stop";
     }
 }

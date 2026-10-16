@@ -70,6 +70,29 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
     private long _inputSequence;
 
     /// <summary>
+    /// The session whose agent a person closed from its own tray menu.
+    /// <para>
+    /// The supervisor's job is to make sure a live session has an agent, and it cannot tell a
+    /// decision apart from a crash: both arrive as a pipe that stopped working. Without this
+    /// the supervisor undid an Exit within three seconds - the icon went and came straight
+    /// back, so the menu item looked broken (D74).
+    /// </para>
+    /// <para>
+    /// Held in memory and keyed by session id rather than persisted. A different id means a
+    /// different person signed in, or the same one signed back in, and either of those is a
+    /// fresh start; the next tick clears it. A service restart also clears it, which is
+    /// honest - restarting the service is itself an act of supervision.
+    /// </para>
+    /// <para>
+    /// A sentinel rather than <c>uint?</c>: <c>volatile</c> cannot be applied to a nullable
+    /// value type, and this is the same encoding <see cref="_sessionId"/> already uses, so the
+    /// two cannot be mistaken for one another.
+    /// </para>
+    /// </summary>
+    private const uint NoStoppedSession = 0xFFFFFFFF;
+    private volatile uint _stoppedByUserInSession = NoStoppedSession;
+
+    /// <summary>
     /// Media questions the service is waiting on, keyed by the correlation id they were asked
     /// with. Removed in a finally on the caller's side, so a timeout cannot leak an entry that
     /// would later resolve a question nobody is asking any more.
@@ -153,7 +176,13 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
             while (await timer.WaitForNextTickAsync(ct))
             {
                 var session = CurrentSession();
-                var shouldRun = session.HasValue && _options.AutoLaunch;
+
+                // Leaving is per session, not for ever. A different id means somebody else
+                // signed in, or the same person signed back in, and either is a fresh start.
+                if (_stoppedByUserInSession != NoStoppedSession && _stoppedByUserInSession != session)
+                    _stoppedByUserInSession = NoStoppedSession;
+
+                var shouldRun = ShouldSupervise(session);
 
                 if (shouldRun && !_connected)
                 {
@@ -169,8 +198,14 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
                 }
                 else if (!shouldRun && _connected)
                 {
-                    _log.LogInformation("The interactive session ended; tearing the command channel down");
-                    await DisconnectAsync("no interactive session").ConfigureAwait(false);
+                    // "The interactive session ended" is only one of the two reasons this
+                    // branch runs, and the other is somebody closing the tray menu - which
+                    // reads as an error in the log when it is the opposite.
+                    var why = _stoppedByUserInSession != NoStoppedSession
+                        ? "stopped from its tray menu"
+                        : "no interactive session";
+                    _log.LogInformation("Tearing the session agent command channel down ({Reason})", why);
+                    await DisconnectAsync(why).ConfigureAwait(false);
                 }
                 if (_connected && _lastHeartbeatUtc != DateTime.MinValue &&
                     DateTime.UtcNow - _lastHeartbeatUtc > TimeSpan.FromSeconds(_options.HeartbeatTimeoutSeconds))
@@ -188,6 +223,28 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
         {
             _log.LogError(ex, "The session agent supervisor stopped unexpectedly");
         }
+    }
+
+    /// <summary>
+    /// Whether the supervisor should be trying to have a session agent in this session.
+    /// <para>
+    /// Internal and free of clocks, pipes and sessions so the Exit decision can be tested on
+    /// its own: it is the whole of what a tray-menu Exit changes, and everything else the
+    /// supervisor does is downstream of this one answer.
+    /// </para>
+    /// </summary>
+    internal bool ShouldSupervise(uint? session)
+        => session.HasValue
+           && _options.AutoLaunch
+           && _stoppedByUserInSession != session;
+
+    /// <summary>
+    /// Records that the agent in this session was closed by a person, so the supervisor stops
+    /// bringing it back. Internal so a test can deliver the message without a pipe.
+    /// </summary>
+    internal void NoteAgentStoppedByUser(uint? sessionId)
+    {
+        _stoppedByUserInSession = sessionId ?? _sessionId;
     }
 
     private async Task EnsureConnectedAsync(uint sessionId, CancellationToken ct)
@@ -436,6 +493,18 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
             case SessionChannelProtocol.Events.Frame:
                 if (m.Data is { Length: > 0 })
                     FrameReceived?.Invoke(this, new SessionAgentFrame(m.DeviceId ?? "", m.Data));
+                break;
+
+            case SessionChannelProtocol.Events.AgentStop:
+                // A person closed the agent from its own tray menu. The pipe breaking a
+                // moment later is the same thing that happens when the agent crashes, and
+                // the supervisor answers a crash by starting another one - which is why
+                // Exit used to leave the icon exactly where it was (D74).
+                NoteAgentStoppedByUser(m.SessionId);
+                _log.LogInformation(
+                    "The session agent in session {Session} was stopped from its tray menu; " +
+                    "it stays stopped until that session ends",
+                    _stoppedByUserInSession);
                 break;
 
             case SessionChannelProtocol.Events.AppStarted:

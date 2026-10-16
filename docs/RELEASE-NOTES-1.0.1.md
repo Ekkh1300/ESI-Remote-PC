@@ -173,6 +173,24 @@ carries no figure. It now carries **no figure** rather than a zero, and the app 
 "measuring…" instead of claiming idleness. The second listing has real numbers, because by then
 there is a previous observation to subtract from. *(D70)*
 
+**And two listings at once destroyed each other's readings.** `cpuPercent` is a difference
+between two samples, so the sampler holds a small table of previous ones — and it read the new
+sample *before* taking the lock the table lives behind, then compared it against what another
+thread had written *inside* that lock. `/system/processes` and `/system/apps/running` walk the same
+singleton, so two requests can overlap. Whichever walk reached a pid first stored the fresher
+numbers; the walk behind then measured its own older numbers against them and found time running
+backwards and a processor total that had gone down — so it reported no reading, and, worse,
+overwrote the good sample it had just been handed with the stale one of its own. The reading and
+the comparison now happen in the same critical section, where the clock can only have moved
+forward and a process's own processor time can only have risen. *(D75)*
+
+**What is also true, and not a defect:** a listing that follows another within a single Windows
+tick — about 15.6 ms — has no interval to divide by, and every process correctly reports no
+reading yet. Two requests fired back to back can do exactly that. It is why the phone's column
+says "measuring…" rather than inventing a number, and why the test that pins this now waits a
+fifth of a second between its two listings instead of asserting that the clock is faster than it
+is. *(D75)*
+
 **The sort chips did nothing.** `CPU`, `Memory` and `Name` were drawn as status tags, not
 buttons: there was no tap handler on any of them, and the highlighted one was hard-coded rather
 than derived from anything. They reorder the list now. *(D70)*
@@ -247,6 +265,62 @@ against the code as it shipped. *(D68)*
 
 ---
 
+## The tray
+
+**Exit did nothing.** The item was wired, the agent really did shut down, and then the tray icon
+was back. The session agent is *supervised*: the service polls every three seconds and, whenever
+a live session has no agent, starts one. A crash and a person choosing Exit arrive at the service
+as the same event — a named pipe that stopped working — so the supervisor answered an Exit by
+bringing the agent straight back. From the tray, an item that closes the process and immediately
+reopens it is indistinguishable from an item wired to nothing.
+
+The agent now says which of the two it is: it writes an `agent.stop` frame *before* the pipe goes,
+and the supervisor holds that as a decision about this session rather than as damage. It is held
+per session id and in memory, so the next sign-in, a different person signing in, or a restart of
+the service each get a fresh start — none of which leaves a machine quietly unreachable. The menu
+item says what it does, **"Exit until the next sign-in"**, because exiting is not for the session
+and the old label did not say so. *(D74)*
+
+The write is given two seconds and no more. It has to reach the pipe before the process does, but
+waiting without a limit would turn an exit into a process that never leaves, which is a worse
+version of the same defect.
+
+**And the icon in the tray was not this product's.** It was `SystemIcons.Application` — the blank
+page Windows draws for a program with no icon of its own — while the shortcuts to that very same
+binary, three menus away on the same desktop, carried the product's mark. Two places disagreed
+about what the user was looking at, and the one they looked at most was the wrong one.
+
+The agent now reads its tray icon back out of its own executable, which carries the one image in
+the repository: the same `release\esi.ico` the installer gives to its shortcuts. One file, so the
+tray, Explorer and the Start menu cannot drift apart, and a test pins that the project file and the
+installer still name the same one. *(D74)*
+
+**Two ways an exit could still have looked broken**, both present after the two fixes above and
+both caught while writing them: a `NotifyIcon` whose process ends while it is still visible leaves
+a ghost icon behind that Windows keeps drawing until the mouse passes over it — so a working exit
+left the mark sitting there — and `Main` ran the runtime without ever disposing it, so nothing hid
+the icon on any path. The icon is taken off the screen before the message loop is asked to end, and
+`Main` disposes the runtime. *(D74)*
+
+---
+
+## The build
+
+**The release script checked an APK that did not have the fixes in it.** `build.ps1` never builds
+the APK — it finds one at the flutter output path and runs the nine installability checks over it,
+and those check the package's *shape*: well-formed, every advertised ABI present and real, signed
+v2/v3, minSdk 24. None of them can tell what code is inside, and `flutter analyze` and
+`flutter test` being green says nothing about the package either.
+
+It nearly shipped that way. The phone-side fixes in this release changed four Dart files, and the
+script then reported nine green PASSes for a package built the previous morning containing none of
+them. The installer carried the agent's half correctly, so the release would have looked complete
+while the phone half was the build before it. The step now refuses an APK older than the newest
+file under `lib/` and says what to run — this is the installer problem already fixed further down
+the same file, arrived at from the other side. *(D73)*
+
+---
+
 ## Not in this release
 
 **Two fields on every process row are still empty.** `/system/processes` also carries `user` and
@@ -290,7 +364,7 @@ handset.
 
 ## Verification
 
-- 429 C# tests, 309 Dart tests, all passing
+- 439 C# tests, 309 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by

@@ -14,7 +14,7 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  4AF8440271C8EFC17767072376D0DD514FD22CA7B625E4D3E2EFB5E6E831B0DC
+ESI-RemotePC-Setup-1.0.1-x64.exe  0A95293CC6EF367CDB50DF083D9AE4D08FD8B8D14534CD499976803C655C18FB
 ESI-RemotePC-1.0.1.apk             B41153F0AE40DFA68A58AEDD442AEE1310E6863D263BB838BAB0905E6FCEB83A
 ```
 
@@ -25,7 +25,7 @@ above is the current one, and the two files in this directory always agree with 
 
 ## What this build fixes
 
-Thirteen, each measured rather than suspected.
+Sixteen, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -134,6 +134,41 @@ reported success the moment the *phone's* track opened - which happens whether o
 capturing anything. So a PC that had refused, for want of a running session agent, played silence
 under a control reading **on**: indistinguishable from a broken codec. It now waits for the
 answer, and a refusal is reported instead of hidden.
+
+**The tray's Exit did nothing.** The item was wired and the agent really did shut down - and then
+the icon was back. The session agent is *supervised*: the service polls every three seconds and,
+whenever a live session has no agent, starts one. A crash and a person choosing Exit arrive as the
+same event - a named pipe that stopped working - so the supervisor answered an Exit by bringing
+the agent back within three seconds, and an icon that returns after closing it looks exactly like
+an item wired to nothing. The agent now writes an `agent.stop` frame before the pipe goes, the
+supervisor treats that as a decision about this session rather than as damage, and the label says
+what it does: **Exit until the next sign-in**. It is held per session and in memory, so the next
+sign-in or a different person signing in gets a fresh start and no machine is left quietly
+unreachable.
+
+**Two more ways that same exit could have looked broken**, both found while fixing it: a tray icon
+whose process ends while it is still visible leaves a *ghost* icon that Windows keeps drawing until
+the mouse passes over it - so a working exit left the mark sitting there; and `Main` ran the
+runtime without disposing it, so nothing hid the icon on any path. The icon now comes off the
+screen before the message loop is asked to end, and `Main` disposes the runtime.
+
+**The icon in the tray was not this product's.** It was `SystemIcons.Application` - the blank page
+Windows draws for a program with no icon of its own - while the shortcuts to that very same binary,
+three menus away on the same desktop, carried the product's mark. Two places disagreed about what
+you were looking at, and the one you look at most was the wrong one. The agent now reads its icon
+back out of its own executable, which carries the one image in the repository: the same
+`release/esi.ico` the installer gives its shortcuts. One file, so tray, Explorer and Start menu
+cannot drift apart.
+
+**The release script checked an APK that did not have the fixes in it.** `build.ps1` never builds
+the APK - it finds one and runs nine installability checks over it, and those check the package's
+*shape*: well-formed, ABIs present and real, signed v2/v3, minSdk 24. None of them can tell what
+code is inside, and `flutter analyze` and `flutter test` being green says nothing about the
+package. It nearly shipped: the phone-side fixes here changed four Dart files, and the script
+reported nine green PASSes for a package built the previous morning containing none of them, while
+the installer carried the agent's half correctly - so the release would have looked complete while
+the phone half was the build before it. It now refuses an APK older than the newest file under
+`lib/` and says what to run.
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only
@@ -305,7 +340,7 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 429 unit and integration
+**Verified by running it.** The Windows build is green end to end: 439 unit and integration
 tests, 19 live probes against a booted agent, and a real install â†' serve â†' uninstall cycle
 that was repeated from the delivered installer file. The Android side is 309 Dart tests, and
 â€" the part that matters â€" a live check that starts a throwaway agent and drives the app's

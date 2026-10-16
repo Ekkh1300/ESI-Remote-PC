@@ -392,23 +392,40 @@ public sealed class AppLauncher(ILogger<AppLauncher> log, ISessionAgentBridge se
     /// </para>
     private double? SampleCpuPercent(Process process)
     {
-        long used;
-        try
-        {
-            used = process.TotalProcessorTime.Ticks;
-        }
-        catch
-        {
-            // A process we cannot open the token for. It is listed without a CPU figure, which
-            // is what the same call has always done for processes that exit mid-walk.
-            return null;
-        }
-
-        var now = Environment.TickCount64;
         var pid = process.Id;
 
+        // The reading and the comparison against the previous one belong to one instant, which
+        // means inside the lock.
+        //
+        // They used to be taken before it. `/system/processes` and `/system/apps/running` both
+        // walk the same singleton, so two requests *can* overlap, and whichever walk reaches a
+        // pid first stores the fresher Ticks and At for it. The walk behind then compares its
+        // own, older, numbers against those: `now - previous.At` comes out negative and
+        // `used < previous.Ticks` comes out true - so a pid the other walk had just recorded
+        // reports no reading, and the sample it had just written was being replaced with the
+        // older one. The second half is the part worth stopping: it destroys good data rather
+        // than merely declining to add to it.
+        //
+        // Read here instead, both values can only be ahead of what is stored: the clock is
+        // monotonic and a process's own processor time only rises. So the two guards mean what
+        // their comments say - a recycled pid, or an interval too short to divide by - and
+        // nothing else.
         lock (_cpuGate)
         {
+            long used;
+            try
+            {
+                used = process.TotalProcessorTime.Ticks;
+            }
+            catch
+            {
+                // A process we cannot open the token for. It is listed without a CPU figure,
+                // which is what the same call has always done for processes that exit mid-walk.
+                return null;
+            }
+
+            var now = Environment.TickCount64;
+
             if (!_cpuSeen.TryGetValue(pid, out var previous))
             {
                 _cpuSeen[pid] = (used, now);
@@ -417,8 +434,18 @@ public sealed class AppLauncher(ILogger<AppLauncher> log, ISessionAgentBridge se
 
             var elapsedMs = now - previous.At;
 
-            // Windows recycles process ids, so a total that went backwards is not the same
-            // process slowing down - it is a different one wearing the number.
+            // Two reasons, and only the second is about process ids.
+            //
+            // An interval of zero is not a rate - it is a division by nothing. Windows' tick
+            // is coarse, about 15.6 ms by default, so two listings fired back to back can
+            // sample the same process inside a single tick, and "no reading yet" is the honest
+            // answer for that one listing. The sample is still recorded, so the *next* listing
+            // has a longer interval to divide by. This is what a test that asked for a rate
+            // after firing two requests without pausing was tripping over: every process on
+            // the machine came back unmeasured, because no time had passed yet.
+            //
+            // A total that went backwards is a recycled process id: Windows hands the same
+            // number to a different process, which is not one slowing down.
             if (elapsedMs <= 0 || used < previous.Ticks)
             {
                 _cpuSeen[pid] = (used, now);

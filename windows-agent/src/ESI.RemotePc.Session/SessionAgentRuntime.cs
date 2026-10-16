@@ -124,11 +124,15 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         menu.Items.Add("Open pairing page", null, (_, _) => OpenPairingPage());
         menu.Items.Add("Remote control status", null, (_, _) => ShowStatus());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Exit", null, (_, _) => Shutdown("the tray menu"));
+
+        // Named for what it does rather than for the click. Exiting is not for the session -
+        // the service supervises this process and would otherwise start another one within
+        // three seconds (D74) - so the label says how long the exit lasts.
+        menu.Items.Add("Exit until the next sign-in", null, (_, _) => Shutdown("the tray menu"));
 
         var tray = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = LoadTrayIcon(),
             Text = "ESI Remote PC",
             ContextMenuStrip = menu,
             Visible = false,
@@ -136,6 +140,45 @@ internal sealed class SessionAgentRuntime : ApplicationContext
 
         tray.DoubleClick += (_, _) => ShowStatus();
         return tray;
+    }
+
+    /// <summary>
+    /// The mark this executable and the installer's shortcuts already carry, falling back to
+    /// the generic Windows one if it cannot be read.
+    /// <para>
+    /// It used to be <see cref="SystemIcons.Application"/> unconditionally - the blank page
+    /// Windows draws for a program with no icon of its own. So the tray said "some other
+    /// program" while a shortcut to the very same binary, three menus away on the same
+    /// desktop, carried the product's mark. Two places disagreed about what the user was
+    /// looking at, and the tray was the wrong one (D74).
+    /// </para>
+    /// <para>
+    /// Read from the executable rather than from a second copy of the file. The icon is
+    /// embedded at build time by <c>ApplicationIcon</c> in the project, from the same
+    /// <c>release\esi.ico</c> the installer uses for its shortcuts - one image, so the tray,
+    /// Explorer and the Start menu cannot drift apart.
+    /// </para>
+    /// </summary>
+    private static Icon LoadTrayIcon()
+    {
+        try
+        {
+            using var extracted = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (extracted is null)
+                return SystemIcons.Application;
+
+            // ExtractAssociatedIcon hands back a 32-pixel image and the tray draws at 16.
+            // Scaling here rather than letting the shell guess keeps the mark from becoming
+            // a blurry suggestion of itself.
+            using var sixteen = new Icon(extracted, new Size(16, 16));
+            return (Icon)sixteen.Clone();
+        }
+        catch (Exception ex)
+        {
+            // A tray icon is not worth a session agent that will not start.
+            Log.Warning(ex, "Could not read this executable's icon; using the generic one");
+            return SystemIcons.Application;
+        }
     }
 
     private void UpdateTrayText()
@@ -909,7 +952,60 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         _stopping.Cancel();
         _capturePump.Stop();
 
+        // Stopped here too. Shutdown is the only path out of this process and this pump was
+        // the one thing on it nothing cancelled: its thread is a background thread, so it
+        // could not hold the process open, but leaving a loop running against a cancelled
+        // token while the rest of the agent tears down is a race nobody needs.
+        _audioPump.Stop();
+
+        // Say this was a decision before the pipe goes away. The service supervises this
+        // process and starts a new one whenever a live session has none, so an exit that
+        // arrives only as a broken pipe is a crash as far as it can tell - and within three
+        // seconds the tray icon is back, with the menu item looking broken. That is exactly
+        // what Exit did (D74).
+        //
+        // Bounded, and blocked on purpose: the write has to reach the pipe before the process
+        // does, but waiting without a limit would turn an exit into a process that never
+        // leaves, which is a worse version of the same bug.
+        AnnounceUserStop();
+
+        // Take the icon off the screen now rather than when the process finally unwinds.
+        // Windows keeps drawing a NotifyIcon whose owner has gone until the mouse passes
+        // over it, so an exit that worked left the mark sitting there - and an icon that
+        // stays put after choosing Exit is the very picture of one that did not (D74).
+        if (_tray is not null)
+            _tray.Visible = false;
+
         _anchor?.RequestExit();
+    }
+
+    /// <summary>
+    /// Tells the service that this agent is being closed by a person, so the supervisor does
+    /// not immediately start another one.
+    /// </summary>
+    private void AnnounceUserStop()
+    {
+        try
+        {
+            var delivered = _channel.SendAsync(new SessionAgentMessage
+            {
+                T = SessionChannelProtocol.Events.AgentStop,
+                UserName = $"{Environment.UserDomainName}\\{Environment.UserName}",
+                SessionId = _options.SessionId,
+                ProcessId = Environment.ProcessId,
+                ProcessName = "ESI.RemotePc.Session",
+                Detail = "exit requested from the tray menu",
+            }).Wait(TimeSpan.FromSeconds(2));
+
+            if (!delivered)
+                _log.Warning(
+                    "The stop request did not reach the service; it may start this agent again");
+        }
+        catch (Exception ex)
+        {
+            // Nothing to be done about it here - the process is leaving either way.
+            _log.Warning(ex, "Could not tell the service this agent was stopped on purpose");
+        }
     }
 
     protected override void Dispose(bool disposing)

@@ -1268,15 +1268,45 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
     [Fact]
     public async Task The_second_process_listing_carries_a_cpu_reading()
     {
-        await ReadProcessesAsync();
+        var first = await ReadProcessesAsync();
+
+        // A rate needs a non-zero interval, and Windows' tick is about 15.6 ms: two listings
+        // fired back to back can sample the same process inside one tick, which is a division
+        // by zero and is correctly reported as no reading. Allowing one tick is not papering
+        // over anything - it is the condition the claim is about.
+        await Task.Delay(150);
+
         var second = await ReadProcessesAsync();
 
-        Assert.NotEmpty(second);
+        // Two different failures hide behind one word. An empty *list* means the agent could
+        // not enumerate the machine at all; an empty set of *readings* means it enumerated
+        // them and measured none. Reporting both as "collection was empty" left them
+        // indistinguishable, which is how this test's one failure in 439 went unexplained.
+        Assert.True(second.Count > 0,
+            $"the second listing carried no processes at all, while the first carried {first.Count}. " +
+            $"The machine itself reports {OsProcessCount()} right now, so this is the agent failing " +
+            "to enumerate them rather than an idle PC.");
 
         // The rate is bounded on both sides by construction, and a reading outside 0-100
         // would be a division that lost track of elapsed time.
         var readings = second.Where(p => p.CpuPercent is not null).ToList();
-        Assert.NotEmpty(readings);
+
+        // Which of the two it is, stated in the message rather than left to the reader: the
+        // pids in common tell a "the samples did not survive" failure apart from "these were
+        // not the same processes at all". Without it the only word was "empty".
+        var firstPids = first.Select(p => p.Pid).ToHashSet();
+        var seenTwice = second.Count(p => firstPids.Contains(p.Pid));
+        var firstReadings = first.Count(p => p.CpuPercent is not null);
+
+        Assert.True(readings.Count > 0,
+            $"none of the {second.Count} processes in the second listing carried a CPU reading. " +
+            $"Of those, {seenTwice} were also in the first listing, which had {first.Count} rows " +
+            $"and {firstReadings} of its own readings. " +
+            (seenTwice > 0
+                ? "So the same processes were sampled twice and neither reading survived - the " +
+                  "sample table is not holding what a listing put into it."
+                : "So the two listings did not return the same processes, and a rate needs the " +
+                  "same pid twice."));
         Assert.All(readings, p => Assert.InRange(p.CpuPercent!.Value, 0, 100));
 
         // A rate for a process that was seen once is not reported as anything, least of all
@@ -1285,6 +1315,22 @@ public sealed class AgentIntegrationTests(AgentFixture fixture) : IClassFixture<
         Assert.All(
             second,
             p => Assert.True(p.CpuPercent is null || p.CpuPercent >= 0));
+    }
+
+    /// <summary>
+    /// How many processes the OS reports directly, for the failure message that has to tell
+    /// "the agent saw none" apart from "there are none".
+    /// </summary>
+    private static string OsProcessCount()
+    {
+        try
+        {
+            return System.Diagnostics.Process.GetProcesses().Length.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"none - enumeration itself threw {ex.GetType().Name}";
+        }
     }
 
     private async Task<List<ProcessReading>> ReadProcessesAsync()

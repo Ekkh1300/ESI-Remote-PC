@@ -21,6 +21,19 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+
+    <!--
+      The product's mark, embedded in this executable so the tray icon can read it back out
+      (D74: the tray showed SystemIcons.Application - the blank page Windows draws for a
+      program with no icon of its own - while the shortcuts to this very binary carried the
+      real one).
+
+      The file is release\esi.ico rather than one inside this project on purpose: it is the
+      single image in the repository, and the installer points at the same path for its
+      shortcuts. A second copy inside src\ would be the start of two marks that quietly
+      disagree, which is the defect this setting exists to end.
+    -->
+    <ApplicationIcon>..\..\..\release\esi.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

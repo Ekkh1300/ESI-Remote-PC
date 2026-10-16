@@ -49,7 +49,12 @@ internal static class Program
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
                 Log.Fatal(e.ExceptionObject as Exception, "The session agent faulted");
 
-            var runtime = new SessionAgentRuntime(options);
+            // Disposed, not merely run to completion. SessionAgentRuntime owns a NotifyIcon,
+            // and a tray icon whose process ends without it being hidden first leaves a ghost
+            // icon behind - it sits in the tray until the mouse passes over it. So a perfectly
+            // successful Exit looked like one that had failed to do anything at all, on top of
+            // the supervisor bringing the agent straight back (D74).
+            using var runtime = new SessionAgentRuntime(options);
             runtime.Run();
 
             return 0;
