@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.ServiceProcess;
@@ -9,18 +10,25 @@ using Esi.Protocol;
 namespace Esi.Cli;
 
 /// <summary>
-/// Registers, removes and inspects the Windows services that make up ESI Remote PC.
+/// Registers, removes and inspects the Windows pieces that make up ESI Remote PC.
 /// <para>
-/// Two services, not one, because of where they run:
+/// Two of them, and not both services, because of where they run:
 /// </para>
 /// <list type="bullet">
 ///   <item><description><b>ESIRemotePcAgent</b> — session 0, LocalSystem, owns the network
-///   listener, the database and the power controls.</description></item>
-///   <item><description><b>ESIRemotePcSession</b> — per-user, owns the interactive desktop:
-///   screen capture, input injection, the lock and sign-out actions, the pairing prompt.
-///   Installed as a per-user service (<c>ServiceUserName</c> set to <c>.</c>) so Windows
-///   starts it in each interactive session at logon.</description></item>
+///   listener, the database and the power controls. Installed as a Windows service, and the
+///   only one.</description></item>
+///   <item><description><b>The session helper</b> — per-user, owns the interactive desktop:
+///   screen capture, input injection, the lock and sign-out actions, the pairing prompt. It
+///   has to be in the user's session to reach <c>winsta0\default</c>, and it is installed as a
+///   <b>logon task</b> rather than as a service: a per-user service needs an empty
+///   <c>obj=</c>, which the SCM rejects — silently, as far as the installer was concerned. See
+///   <see cref="TaskCommands"/>.</description></item>
 /// </list>
+/// <para>
+/// The service named <c>ESIRemotePcSession</c> still appears below, for a machine installed by
+/// <c>esirc install</c>, which creates one. It is not how the helper is shipped.
+/// </para>
 /// <para>
 /// The recovery actions and the <c>requiredPrivileges</c> registry value are set through
 /// <c>sc.exe</c> and direct registry writes because <see cref="ServiceController"/> does not
@@ -411,29 +419,8 @@ internal static class ServiceManager
         Console.WriteLine($"  pairing page    {pairingPage}");
         Console.WriteLine();
 
-        foreach (var name in new[] { ProtocolConstants.ServiceName, ProtocolConstants.SessionServiceName })
-        {
-            if (!Exists(name))
-            {
-                Console.WriteLine($"  {name,-24} not installed");
-                continue;
-            }
-
-            try
-            {
-                using var sc = new ServiceController(name);
-                sc.Refresh();
-
-                Console.WriteLine($"  {name,-24} {sc.Status,-12} {sc.StartType,-10}");
-
-                if (sc.Status == ServiceControllerStatus.Stopped && sc.StartType == ServiceStartMode.Disabled)
-                    Console.WriteLine($"  {name,-24} -> enable it with: sc config {name} start= auto");
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
-            {
-                Console.WriteLine($"  {name,-24} error: {ex.Message}");
-            }
-        }
+        ReportService(ProtocolConstants.ServiceName);
+        ReportSessionAgent();
 
         var logDirectory = Path.Combine(ResolveDataDirectory(), "logs");
         if (Directory.Exists(logDirectory))
@@ -451,6 +438,103 @@ internal static class ServiceManager
         }
 
         return 0;
+    }
+
+    /// <summary>One row of a service, or a note that it is not there.</summary>
+    private static void ReportService(string name)
+    {
+        if (!Exists(name))
+        {
+            Console.WriteLine($"  {name,-24} not installed");
+            return;
+        }
+
+        try
+        {
+            using var sc = new ServiceController(name);
+            sc.Refresh();
+
+            Console.WriteLine($"  {name,-24} {sc.Status,-12} {sc.StartType,-10}");
+
+            if (sc.Status == ServiceControllerStatus.Stopped && sc.StartType == ServiceStartMode.Disabled)
+                Console.WriteLine($"  {name,-24} -> enable it with: sc config {name} start= auto");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            Console.WriteLine($"  {name,-24} error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// One row for the per-user half of the product: the session helper that owns screen
+    /// capture, input injection and the pairing prompt.
+    /// </summary>
+    private static void ReportSessionAgent()
+    {
+        const string label = ProtocolConstants.SessionServiceName;
+
+        var helper = Process.GetProcessesByName(TaskCommands.SessionAgentProcessName).FirstOrDefault();
+        using (helper)
+        {
+            var text = DescribeSessionAgent(
+                serviceRegistered: Exists(label),
+                taskRegistered: TaskCommands.IsRegistered(),
+                helperRunning: helper is not null,
+                helperPid: helper?.Id ?? 0);
+
+            // Null means "this machine has the legacy per-user service", which is reported as a
+            // service row rather than as a line of its own.
+            if (text is null)
+            {
+                ReportService(label);
+                return;
+            }
+
+            Console.WriteLine($"  {label,-24} {text}");
+        }
+    }
+
+    /// <summary>
+    /// What the status report says about the session helper, given what this machine has.
+    /// <para>
+    /// Internal and free of the SCM, <c>schtasks</c> and the process list so the answer can be
+    /// tested on its own: this one line is the whole of the defect, and everything around it is
+    /// I/O.
+    /// </para>
+    /// <para>
+    /// The helper used to be a per-user service called <c>ESIRemotePcSession</c>, and this
+    /// report asked the SCM about it - which is what it still did long after the SCM stopped
+    /// being where it lived. A per-user service is registered with an empty <c>obj=</c>, which
+    /// the SCM rejects, so the helper became a logon task; the status line was never told, and
+    /// answered "not installed" for the one component whose entire job is to report whether the
+    /// others are installed. It is printed by the Start Menu's "Agent status (console)"
+    /// shortcut, which exists for exactly that question - while the helper was running.
+    /// </para>
+    /// <para>
+    /// A machine installed by <c>esirc install</c> still gets the service row: that command
+    /// still creates one, and reporting it as absent would be the same defect facing the other
+    /// way.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// Null when the machine has the legacy service and it should be reported as a service row;
+    /// otherwise the text to print after the name.
+    /// </returns>
+    internal static string? DescribeSessionAgent(
+        bool serviceRegistered,
+        bool taskRegistered,
+        bool helperRunning,
+        int helperPid)
+    {
+        if (serviceRegistered)
+            return null;
+
+        if (!taskRegistered)
+            return "not installed";
+
+        return helperRunning
+            ? string.Create(CultureInfo.InvariantCulture, $"running (pid {helperPid})")
+            : "registered, not running";
     }
 
     private static string FormatAge(TimeSpan age) => age.TotalHours >= 1

@@ -36,6 +36,22 @@ public static class TaskCommands
     /// <summary>File name of the session helper, beside the CLI when installed.</summary>
     private const string SessionAgentFileName = "ESI.RemotePc.Session.exe";
 
+    /// <summary>Process name of the session helper, derived so the two cannot drift apart.</summary>
+    internal static string SessionAgentProcessName =>
+        Path.GetFileNameWithoutExtension(SessionAgentFileName);
+
+    /// <summary>
+    /// Whether the logon task is registered on this machine.
+    /// <para>
+    /// The exit code, not the words: <c>schtasks</c> prints its output in the operating
+    /// system's own language, so reading a status out of the text would make a report wrong on
+    /// every machine that is not running English. It exits 0 when the task exists and 1 when it
+    /// does not, and neither answer depends on a locale.
+    /// </para>
+    /// </summary>
+    internal static bool IsRegistered() =>
+        RunSchtasks("/query", "/tn", SessionAgentTaskName).ExitCode == 0;
+
     public static int Register(string[] args)
     {
         if (args.Length == 0 || args[0] is "--help" or "-h" or "-?")
