@@ -1,4 +1,4 @@
-# ESI Remote PC Ã¢â‚¬â€ Roadmap
+# ESI Remote PC — Roadmap
 
 What is built, what is deliberately not built, and what would come next with reasons. This
 is a statement of intent, not a schedule. Items are ordered by the damage they do if left
@@ -44,27 +44,27 @@ The following is implemented, covered by tests, and exercised by the smoke test.
 
 | Item | Where |
 |---|---|
-| 58 route registrations under `/api/v1` (59 method/path pairs Ã¢â‚¬â€ `PUT` and `POST` on `/files/upload` are one `MapMethods` call), plus `/pairing` and `/ws` | `Endpoints.cs` |
+| 58 route registrations under `/api/v1` (59 method/path pairs — `PUT` and `POST` on `/files/upload` are one `MapMethods` call), plus `/pairing` and `/ws` | `Endpoints.cs` |
 | WebSocket hub: subscriptions, metrics push, notification push, screen stream, input | `WebSocketHub.cs` |
-| Session-0 service and per-user session agent, split on the interactive-desktop boundary | `ARCHITECTURE.md` Ã‚Â§2 |
+| Session-0 service and per-user session agent, split on the interactive-desktop boundary | `ARCHITECTURE.md` §2 |
 | Named-pipe command channel with a DACL narrowed to the console session's own user | `SessionAgentBridge.CreatePipeServer` |
 | GDI screen capture with a tile hash grid and JPEG delta encoding | `ScreenStreamEncoder.cs` |
 | `SendInput` injection with W3C `KeyboardEvent.code` mapping and Unicode fallback | `KeyMap.cs`, `InputInjector.cs` |
 | UDP broadcast discovery and an RFC 6762/6763 mDNS responder | `UdpDiscoveryResponder.cs`, `MdnsResponder.cs` |
-| Telemetry: PDH counters, NVML, WMI, temperatures Ã¢â‚¬â€ never a fabricated value | `SystemSampler`, `NvmlProvider`, `TemperatureProvider` |
+| Telemetry: PDH counters, NVML, WMI, temperatures — never a fabricated value | `SystemSampler`, `NvmlProvider`, `TemperatureProvider` |
 | Power control, WoL sending and readiness reporting | `PowerService`, `WakeOnLanSender`, `PowerStateProbe` |
 | Gaming mode with exact previous-state restore | `GamingService` |
 | Notification rules with sustain timers and cooldowns | `NotificationEngine`, `NotificationRuleCatalog` |
 | Two Windows services with failure recovery and `requiredPrivileges` | `ServiceManager.cs`, `ESI-RemotePC.iss` |
 | `esirc` administration CLI | `ESI.RemotePc.Agent.Cli` |
-| 91 test methods Ã¢â‚¬â€ 38 crypto, 32 sandbox, 21 HTTP integration including a full middleware-pipeline harness | `ESI.RemotePc.Tests` |
+| 91 test methods — 38 crypto, 32 sandbox, 21 HTTP integration including a full middleware-pipeline harness | `ESI.RemotePc.Tests` |
 | A smoke test that boots the published binary and runs 13 checks | `tests/smoke-test.ps1` |
 
 ---
 
 ## 2. Known defects in shipped code
 
-Not "limitations of the design" Ã¢â‚¬â€ defects. Each is a specific, locatable behaviour that
+Not "limitations of the design" — defects. Each is a specific, locatable behaviour that
 contradicts the code's own stated intent or the protocol. All are documented in
 [`SECURITY.md`](SECURITY.md) and [`API.md`](API.md); they are listed here because they are
 what should be fixed first.
@@ -86,19 +86,19 @@ local.
 | # | Defect | Location | Effect |
 |---|---|---|---|
 | **D4** | The rotation grace period does not work. `ApplyRotation` replaces `master_secret` with the new value; `Verify` then accepts the previous `keyId` but derives the session key from the *new* secret, so a client holding the old one fails with `esi_signature` rather than succeeding | `DeviceStore.ApplyRotation` + `RequestVerifier.Verify` step 5 | The documented 120 s dual-key window is a header-tolerance window only |
-| **D5** | The pairing rate limit is 5 tokens per **minute**, not per hour. `TryConsume(key, perMinute: PairingPerHour, burst: 2)` refills at `perMinute/60000` per millisecond | `RateLimiter.TryConsumeForAddress` | The comment, the field name and `PROTOCOL.md` Ã‚Â§3 all say "per hour". A phone retrying a failed pairing is not locked out |
+| **D5** | The pairing rate limit is 5 tokens per **minute**, not per hour. `TryConsume(key, perMinute: PairingPerHour, burst: 2)` refills at `perMinute/60000` per millisecond | `RateLimiter.TryConsumeForAddress` | The comment, the field name and `PROTOCOL.md` §3 all say "per hour". A phone retrying a failed pairing is not locked out |
 | **D6** | The nonce cache is in memory, so a restart empties it and a request captured before the restart can be replayed inside the 300 s window | `RequestVerifier._nonces` | Accepted trade for the metrics path, but it should be stated in the threat model rather than left implicit |
-| **D7** | `IsHiberbootEnabled` reads only `HiberbootEnabled` from the registry. The `powercfg /a` fallback in the comment ("Hybrid Boot" detection) is not implemented Ã¢â‚¬â€ the method returns `false` when the value is absent | `PowerStateProbe.IsHiberbootEnabled` | A machine with Fast Startup managed by other means reports `hiberbootEnabled: false` and no issue |
+| **D7** | `IsHiberbootEnabled` reads only `HiberbootEnabled` from the registry. The `powercfg /a` fallback in the comment ("Hybrid Boot" detection) is not implemented — the method returns `false` when the value is absent | `PowerStateProbe.IsHiberbootEnabled` | A machine with Fast Startup managed by other means reports `hiberbootEnabled: false` and no issue |
 | **D8** | `PairStatusResponse.spkiSha256` is declared and never populated | `PairingManager.Poll` | A client that expects the pin here gets nothing. The DTO invites the mistake |
 | **D9** | `GamingStateResponse.sessionAgentConnected` is hardcoded to `false` | `GamingService.GetState` | Carries no information and will mislead a client |
 | **D10** | `AppEntryDto.iconPath` is declared and never populated by the catalogue | `Catalogs.cs` | An icon-less launcher list |
 | **D11** | `HubConnection.IsAlive` is defined with a 45 s threshold and never called. There is no idle-socket reaper and no failed-send counter | `WebSocketHub` | Half-open sockets persist until the client or the OS notices |
 | **D12** | `NetworkProvider.GetWakeCapableAdapters` carries a doc comment saying "adapters that are wired" and applies no filter, so Wi-Fi and virtual adapters appear in `armedDevices` | `NetworkProvider.GetWakeCapableAdapters` | Noise, not a security issue. The endpoint only uses the list to raise the "no wired adapter" issue |
 | **D13** | `SettingsStore.UpdateAsync` warns about `localNetworkOnly`, `requireSignedRequests` and `tlsEnabled` and then overwrites all three back to `true` | `SettingsStore.UpdateAsync` | The warnings are misleading: they describe a change that is then silently reverted |
-| **D14** | `EsiCrypto.DeriveAuditKey` is implemented, mirrored on the Android side, and documented in `PROTOCOL.md` Ã‚Â§5.2 Ã¢â‚¬â€ and never used. `AuditLog` chains unkeyed hashes | `EsiCrypto`, `AuditLog` | The audit chain is tamper-evident but not keyed, and the specification overstates it |
+| **D14** | `EsiCrypto.DeriveAuditKey` is implemented, mirrored on the Android side, and documented in `PROTOCOL.md` §5.2 — and never used. `AuditLog` chains unkeyed hashes | `EsiCrypto`, `AuditLog` | The audit chain is tamper-evident but not keyed, and the specification overstates it |
 | **D15** | `AuditLog.ActionAuthSucceeded` is declared and never recorded | `AuditLog` | Successful authentications are absent from the trail |
 | **D16** | `schema_version` table exists with no migration runner | `AgentDatabase` | The first schema change after release will need one written from scratch |
-| **D17** | `AgentOptions.SessionTokenPath` declares `session.token`, described in `ISessionAgentBridge` as the session agent's per-boot credential for a reverse HTTP channel Ã¢â‚¬â€ and nothing writes or reads it | `SettingsStore.AgentOptions` | The documented agentÃ¢â€ â€™service reverse channel does not exist. The pipe is the only reverse path |
+| **D17** | `AgentOptions.SessionTokenPath` declares `session.token`, described in `ISessionAgentBridge` as the session agent's per-boot credential for a reverse HTTP channel — and nothing writes or reads it | `SettingsStore.AgentOptions` | The documented agent→service reverse channel does not exist. The pipe is the only reverse path |
 | **D18** | `PowerStatusResponse.pendingPowerAction` is declared and never populated | `PowerService` | Always `null` |
 | ~~D19~~ | **RESOLVED.** `SessionAgentBridge` orphaned an open named-pipe server instance. `PumpAsync` cleared `_connected` in its `finally` but never closed the pipe it had been reading, and `EnsureConnectedAsync` then ran `_pipe = CreatePipeServer()` straight over the old reference. The pipe name allows one server instance, so the orphaned one made every later `CreatePipeServer` fail with `All pipe instances are busy` - the exact exception the agent log was already printing - and after that the bridge could never reconnect, leaving the session agent at `NotRunning` for the life of the process. The pump now closes the instance it owns, and `EnsureConnectedAsync` releases any leftover before creating another | `SessionAgentBridge.PumpAsync` finally, `SessionAgentBridge.EnsureConnectedAsync` | Was: remote input and screen frames stop working after the first reconnect, with no error a user can act on. No longer applies |
 | **D20** | An install once timed out waiting for the service to disappear from the SCM and warned that a reboot was needed, and `sc start` then answered 87 with the key in delete-pending. **The cause was not established.** The obvious suspect - the session helper holding the service handle, because killing the helper made a pending delete complete at once - does not survive measurement: with the helper running, a clean stop takes the service process down in 0.6 s and the key is removed in 0 s, and the full install cycle passes 26/26 with no delay. Something held the key on that one occasion and has not held it since | `WaitForServiceGone`, `StopAgentService` | Twice, a reinstall looked like it had done nothing, and once it reported a false "reboot, then run this installer again". The installer says what it saw, which is what made it findable at all |
@@ -121,7 +121,7 @@ local.
 ### Protocol drift
 
 `PROTOCOL.md` describes routes and behaviour the agent does not have. Full table in
-[`API.md`](API.md) Ã‚Â§15. The two that change what a client can do:
+[`API.md`](API.md) §15. The two that change what a client can do:
 
 | Documented | Reality |
 |---|---|
@@ -139,11 +139,11 @@ with the trade-off in mind rather than rediscovered.
 
 | Not done | Why |
 |---|---|
-| **No MFA on pairing** | A second factor has to come from somewhere. The obvious answer Ã¢â‚¬â€ a PIN on the phone Ã¢â‚¬â€ defends against a stolen phone, which is already what the keystore and the lock screen defend against. A better answer is a confirmation on a *second* already-trusted device, which is a real protocol change. Doing neither is more honest than shipping a checkbox |
+| **No MFA on pairing** | A second factor has to come from somewhere. The obvious answer — a PIN on the phone — defends against a stolen phone, which is already what the keystore and the lock screen defend against. A better answer is a confirmation on a *second* already-trusted device, which is a real protocol change. Doing neither is more honest than shipping a checkbox |
 | **No client certificates / mutual TLS** | The phone authenticates with a signed request on every call. A client certificate adds ceremony without adding a property the signature does not already provide. `ClientCertificateMode.NoCertificate` is a considered choice |
 | **No certificate revocation list** | The only credential is the SPKI pin, held by the paired device. `CertificateAuthority.Reset()` is the revocation mechanism: delete the identity, invalidate every pairing. A CRL would need a distribution channel a LAN product does not have |
 | **No per-action confirmation on the PC** | Approving an action is more secure and unusable for a remote-control product. The control boundary is the pairing decision, not the click |
-| **No read-only pairing mode exposed** | `PairingManager.Approve` takes a `DeviceScope` argument, so the capability exists. Only the CLI calls it, and it hardcodes `Read \| Control \| Files`. Surfacing the choice means deciding who chooses, and the current answer Ã¢â‚¬â€ the human at the PC during pairing Ã¢â‚¬â€ is right |
+| **No read-only pairing mode exposed** | `PairingManager.Approve` takes a `DeviceScope` argument, so the capability exists. Only the CLI calls it, and it hardcodes `Read \| Control \| Files`. Surfacing the choice means deciding who chooses, and the current answer — the human at the PC during pairing — is right |
 | **No encryption of the audit log at rest** | The log contains device ids, addresses and action descriptions, not secrets. DPAPI would make it unreadable to the local operator, which is the person most likely to need it |
 | **No rate limiting on `LocalNetworkGuard` failures** | Rejections happen before authentication and are already the cheapest possible path: one dictionary lookup, no I/O. The per-address bucket that follows authentication covers the expensive case |
 
@@ -167,7 +167,7 @@ with the trade-off in mind rather than rediscovered.
 
 | Not done | Why |
 |---|---|
-| **No `remoteAccess` feature** | The handshake advertises `"remoteAccess": false` and always has. Reaching the PC from outside the LAN needs a relay, and a relay is a different product with a different threat model Ã¢â‚¬â€ an internet-facing node holding a master secret. Advertising it as `false` is the honest thing to do until it exists |
+| **No `remoteAccess` feature** | The handshake advertises `"remoteAccess": false` and always has. Reaching the PC from outside the LAN needs a relay, and a relay is a different product with a different threat model — an internet-facing node holding a master secret. Advertising it as `false` is the honest thing to do until it exists |
 | **No cloud relay** | See above. It would be the single largest change to the security model in this document |
 | **No file manager UI in the app** | The agent serves `/files/*` fully and the app has no `state/files.dart`. The endpoints were built to a documented contract; the UI was not started. The API is ready |
 | **No `gaming.watch` streaming** | The frame type exists in the hub's vocabulary and no code path emits it. A pushed gaming-state channel is a small change once there is a reason for it |
@@ -179,22 +179,22 @@ with the trade-off in mind rather than rediscovered.
 
 Ordered by the damage of leaving them undone.
 
-### Immediate Ã¢â‚¬â€ correctness and access control
+### Immediate — correctness and access control
 
 1. ~~**Ship a pairing QR emitter.**~~ Done. `QrEncoder` renders it, `/pairing/qr.svg` serves
    it, the desktop prompt shows it, and `esirc pair url` covers the headless case. Closes
    **D1**, which was the item that stopped a user exercising anything else in the product.
 2. **Fix the scope table for process termination.** Add `/api/v1/system/process` to the
-   `control` branch. Closes **D2**. One line, and add an integration test alongside it Ã¢â‚¬â€
+   `control` branch. Closes **D2**. One line, and add an integration test alongside it —
    `AgentIntegrationTests` already has `The_files_scope_is_required_for_file_routes` and
    `A_device_with_no_admin_scope_cannot_read_the_audit_log` to copy.
 3. **Add a per-frame scope check to `DispatchAsync`.** A second prefix table for WebSocket
-   frame types: `remote.*` Ã¢â€ â€™ `control`, `gaming.mode` if it is ever added Ã¢â€ â€™ `control`,
-   `subscribe` Ã¢â€ â€™ the scope each channel requires. Closes **D3**.
+   frame types: `remote.*` → `control`, `gaming.mode` if it is ever added → `control`,
+   `subscribe` → the scope each channel requires. Closes **D3**.
 4. **Make the rotation grace period real.** Retain the previous `masterSecret` alongside
-   the current one Ã¢â‚¬â€ a `previous_master_secret` column, DPAPI-protected the same way Ã¢â‚¬â€ and
+   the current one — a `previous_master_secret` column, DPAPI-protected the same way — and
    select on `keyId` rather than always using `device.MasterSecret`. Closes **D4**, and makes
-   `PROTOCOL.md` Ã‚Â§5.3 true. Rotation becomes safe to trigger without a synchronisation
+   `PROTOCOL.md` §5.3 true. Rotation becomes safe to trigger without a synchronisation
    window, which is what makes it usable as a compromise-recovery path.
 5. **Give key rotation a delivery path.** Either a tray-menu command that shows the
    `wrappedSecrets` envelope for out-of-band transfer, or a recovery code the phone can
@@ -204,9 +204,9 @@ Ordered by the damage of leaving them undone.
 
 ### Short term
 
-6. **Fix the pairing rate limit.** Either implement a genuine hourly bucket Ã¢â‚¬â€ a separate
-   refill calculation, not the shared per-minute one Ã¢â‚¬â€ or rename the field and correct the
-   comment and `PROTOCOL.md` Ã‚Â§3. Closes **D5**. The honest answer is probably to keep the
+6. **Fix the pairing rate limit.** Either implement a genuine hourly bucket — a separate
+   refill calculation, not the shared per-minute one — or rename the field and correct the
+   comment and `PROTOCOL.md` §3. Closes **D5**. The honest answer is probably to keep the
    current behaviour and correct the documentation, because an hour-long lockout after five
    failed attempts is a denial-of-service vector on a shared LAN.
 7. **Persist the nonce cache**, or state D6 in `SECURITY.md` as an accepted risk. Persisting
@@ -230,7 +230,7 @@ Ordered by the damage of leaving them undone.
     against the certificate's `IP:` SANs, and reissuing when they differ, closes the
     "certificate SANs do not match the current address" failure in
     [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md). Note this changes the pin only if the key
-    changes Ã¢â‚¬â€ a reissue with the same key and a new serial keeps the SPKI pin valid, which
+    changes — a reissue with the same key and a new serial keeps the SPKI pin valid, which
     is exactly why the specification pins the SubjectPublicKeyInfo.
 
 ### Medium term
@@ -240,7 +240,7 @@ Ordered by the damage of leaving them undone.
 13. **A `frameType == 3` tile-resend path.** A per-tile sequence or a periodic full-grid
     keyframe so a client can detect loss. `ScreenFrameHeader.ResyncRequest` and
     `TileDescriptor` are already defined. Until this exists, a dropped tile stays dropped
-    until the cell changes Ã¢â‚¬â€ which on a static screen is never.
+    until the cell changes — which on a static screen is never.
 14. **A SQLite migration runner.** `schema_version` is already in the schema. Closes
     **D16**. Every item above that adds a column needs it.
 15. **A file manager screen in the app.** The API is complete and sandboxed; `state/files.dart`
@@ -249,7 +249,7 @@ Ordered by the damage of leaving them undone.
 16. **DXGI Desktop Duplication as an alternative capture provider.** Implement
     `IScreenCaptureProvider` against the Desktop Duplication API and return the same
     `CapturedFrame`. Nothing above the abstraction changes. The provider registry is the
-    only new decision Ã¢â‚¬â€ which one to prefer, and how to fall back when the DXGI path is
+    only new decision — which one to prefer, and how to fall back when the DXGI path is
     unavailable on a VM.
 17. **Push gaming state over the WebSocket.** `BroadcastEventAsync` exists;
     `gaming.watch` does nothing. Subscribe, then push on the metrics tick. Small, and the
@@ -259,9 +259,9 @@ Ordered by the damage of leaving them undone.
 
 | Item | What it would require | Why it is not next |
 |---|---|---|
-| **RDP-class graphics** | An H.264 or RemoteFX-class codec, an RDP graphics pipeline, and the multi-monitor spanning and cursor work that comes with it. `Codecs.RdpGraphicsPipeline = 2` is already reserved in `Codecs` | The delta-stream design in `PROTOCOL.md` Ã‚Â§8 exists so this is an additive transport change rather than a rewrite. Rushing it means abandoning the tile grid that makes the current version cheap on Wi-Fi |
-| **A relay / internet access** | A relay node, an authentication scheme for it, and a completely new section in [`SECURITY.md`](SECURITY.md) Ã‚Â§11 about a node holding master secrets on a public network | The handshake already advertises `remoteAccess: false`. Enabling it before the threat model exists would be the worst possible order |
-| **Multi-factor authentication** | A second factor, and a decision about who holds it | See "not done". The right answer Ã¢â‚¬â€ a second paired device confirming Ã¢â‚¬â€ is a protocol change, not a feature flag |
+| **RDP-class graphics** | An H.264 or RemoteFX-class codec, an RDP graphics pipeline, and the multi-monitor spanning and cursor work that comes with it. `Codecs.RdpGraphicsPipeline = 2` is already reserved in `Codecs` | The delta-stream design in `PROTOCOL.md` §8 exists so this is an additive transport change rather than a rewrite. Rushing it means abandoning the tile grid that makes the current version cheap on Wi-Fi |
+| **A relay / internet access** | A relay node, an authentication scheme for it, and a completely new section in [`SECURITY.md`](SECURITY.md) §11 about a node holding master secrets on a public network | The handshake already advertises `remoteAccess: false`. Enabling it before the threat model exists would be the worst possible order |
+| **Multi-factor authentication** | A second factor, and a decision about who holds it | See "not done". The right answer — a second paired device confirming — is a protocol change, not a feature flag |
 | **Scheduled actions** | A durable job store, a clock, and a conflict story with power actions that are already immediate | A nice-to-have that expands the blast radius of the `control` scope |
 | **Clipboard and audio** | Separate modules with separate threat models | See "not done" |
 
@@ -284,8 +284,8 @@ Listed so a future change does not reintroduce them.
 | The three executables are published from one build | `build.ps1` | They bake in the same protocol constants. A service and a client that disagree on a wire constant fail at runtime, not at build time |
 | `RuntimeIdentifiers` is not set in `Directory.Build.props` | `Directory.Build.props` | It multiplies restore time by the RID count for no benefit in normal development |
 | Serial and scope checks are constant-time | `EsiCrypto.SignatureEquals` | Not a micro-optimisation concern; it is the difference between "a wrong signature fails" and "a wrong signature fails slowly" |
-| The rate limiter refills continuously rather than in fixed windows | `RateLimiter.TryConsume` | A fixed window gives a client 2Ãƒâ€” the budget across the boundary |
-| `AuditLog.Record` swallows exceptions | `AuditLog.Record` | An audit failure must not take down the operation being audited. This is a real trade, and it is stated in [`SECURITY.md`](SECURITY.md) Ã‚Â§10 |
+| The rate limiter refills continuously rather than in fixed windows | `RateLimiter.TryConsume` | A fixed window gives a client 2× the budget across the boundary |
+| `AuditLog.Record` swallows exceptions | `AuditLog.Record` | An audit failure must not take down the operation being audited. This is a real trade, and it is stated in [`SECURITY.md`](SECURITY.md) §10 |
 
 ---
 

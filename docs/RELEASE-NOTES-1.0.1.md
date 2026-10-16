@@ -323,6 +323,59 @@ left the mark sitting there — and `Main` ran the runtime without ever disposin
 the icon on any path. The icon is taken off the screen before the message loop is asked to end, and
 `Main` disposes the runtime. *(D74)*
 
+## The status command
+
+**It said the session helper was not installed, on machines that had it installed and running.**
+The Start Menu ships an entry called **Agent status (console)**, and it exists for exactly one
+question — is this actually installed and running. It answered with:
+
+```
+ESIRemotePcAgent         Running      Automatic
+ESIRemotePcSession       not installed
+```
+
+which is the one screen whose entire job is to report reality, reporting something false. It is
+also the first thing anybody is told to run when something looks wrong, so the false answer
+arrives at the moment it does most damage: a person debugging a problem is told the component
+they are about to debug is not there. It printed this while the helper was running, with its tray
+icon, in the taskbar, three lines above a log file that shows the helper connecting.
+
+The helper used to be a per-user Windows service. It cannot be one: a per-user service is
+registered with an empty `obj=`, which the SCM rejects — `esirc task --help` says so in as many
+words — so the helper became a **logon task** instead. The status line was never told, and kept
+asking the SCM about a service that no longer exists. Every answer to that question is "no such
+service", so it reached "not installed" on its own, about itself. *(D77)*
+
+It now asks three questions in order: is there still a legacy per-user service, is the logon task
+registered, and is the helper running.
+
+```
+ESIRemotePcAgent         Running      Automatic
+ESIRemotePcSession       running (pid 14328)
+```
+
+The first question is not tidiness. `esirc install` still creates that service, and a machine
+installed by it should be reported as a service — reporting *it* as absent would be the same
+defect facing the other way, which is the half of the rule the old code got wrong: the absence of
+that service says nothing at all about whether the helper is installed.
+
+The existence check reads `schtasks`' **exit code** and never its text, because `schtasks` prints
+that text in the operating system's own language. A report that is only right on an English
+machine is a report that is wrong.
+
+The decision is a pure function, internal and free of the SCM, `schtasks` and the process list —
+the same way the tray's Exit rule was pinned above. Removing the one condition that made it ask
+about the task at all, which *is* the old rule, makes three tests fail with `Actual: "not
+installed"`, the defect exactly.
+
+It was then checked on the machine that reported it: the installer from the previous prerelease
+still prints `not installed`, the new CLI prints `running (pid 14328)`.
+
+**What is not claimed:** the status line reports the helper as running by finding a process of
+that name, which is evidence rather than a guarantee — a process could exist without the task
+having started it. It is the same signal a person would use by eye, and a stronger one than the
+SCM was giving.
+
 ---
 
 ## The build
@@ -385,7 +438,7 @@ handset.
 
 ## Verification
 
-- 439 C# tests, 310 Dart tests, all passing
+- 447 C# tests, 310 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
@@ -399,6 +452,9 @@ handset.
   with `Expected: on / Actual: failed`, the false refusal exactly
 - The tray's Exit decision and the order it shuts the icon down in are pinned by ten tests in
   `SessionAgentStopTests.cs`, each run against the code as it shipped and failing there
+- What `esirc status` reports about the session helper is pinned by eight tests in
+  `SessionAgentStatusTests.cs`; removing the task check makes three of them fail with
+  `Actual: "not installed"`
 - The usage graph's whole path — PC history, snapshot, accumulated window, three channels,
   painter — is measured end to end by `test/state/metrics_history_test.dart`
 - Full screen is measured by `test/ui/fullscreen_test.dart`, including which widget answers a
