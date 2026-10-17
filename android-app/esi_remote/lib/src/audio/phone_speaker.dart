@@ -284,6 +284,11 @@ class PhoneSpeaker {
     // `Int16List` is native-endian and Android is little-endian, so the buffer can go straight
     // across. The explicit view is still used so the intent survives a future port to a
     // big-endian target rather than silently swapping the bytes of every sample.
+    //
+    // The wire contract is the bare byte array AS the arguments - not `{'data': bytes}`.
+    // test/audio/audio_wire_test.dart pins that shape, and the MainActivity host normalises
+    // both spellings; wrapping it here again would reopen D86, the ClassCastException that
+    // silenced every write without ever surfacing an error.
     final bytes = ByteData.sublistView(pcm).buffer.asUint8List();
     channel.invokeMethod<void>('write', bytes);
     _packetsPlayed++;

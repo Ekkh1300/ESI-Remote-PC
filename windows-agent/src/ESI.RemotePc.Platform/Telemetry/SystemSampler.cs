@@ -138,20 +138,22 @@ public sealed class SystemSampler : IDisposable
             return;
 
         _gpuEngineProbed = true;
-        var instances = _pdh.ExpandWildcardInstances(PdhCounters.GpuEngineUtilization);
 
-        if (instances.Count > 0)
+        // Availability is the add call itself: PdhAddEnglishCounter succeeds exactly where
+        // the counter object exists, in any locale, and that is the whole question. The
+        // wildcard *expand* is not the probe, because measured on this machine it reports
+        // one row where the same counter's read enumerates 541 - a call whose answer varies
+        // that far from the thing it describes decides nothing. It stays in the log only.
+        _gpuEngineAvailable = _pdh.AddWildcardValueCounter(PdhCounters.GpuEngineUtilization, "gpu.engine");
+        if (_gpuEngineAvailable)
         {
-            _gpuEngineAvailable = _pdh.AddWildcardValueCounter(PdhCounters.GpuEngineUtilization, "gpu.engine");
             _pdh.AddWildcardValueCounter(PdhCounters.GpuAdapterMemoryShared, "gpu.sharedMemory");
             _pdh.AddWildcardValueCounter(PdhCounters.GpuAdapterMemoryDedicated, "gpu.dedicatedMemory");
         }
 
         _log.LogInformation(
-            "GPU Engine performance counter: {State} ({InstanceCount} instances). " +
-            "GPU load will {Fallback}.",
+            "GPU Engine performance counter: {State}. GPU load will {Fallback}.",
             _gpuEngineAvailable ? "available" : "not available",
-            instances.Count,
             _gpuEngineAvailable ? "come from the per-engine counters" : "come from vendor APIs (NVML) or be reported as unavailable");
     }
 
@@ -403,24 +405,39 @@ public sealed class SystemSampler : IDisposable
     }
 
     /// <summary>
-    /// Extracts the two-LUID adapter key from a GPU Engine instance name.
-    /// Returns <c>null</c> for anything that does not match the documented shape.
+    /// Extracts the adapter's LUID key from a GPU Engine instance name.
+    /// Returns <c>null</c> for anything that does not name a LUID.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The instance family changed shape across Windows versions, and both spellings are
+    /// alive in the field. The one the documentation describes leads with the adapter:
+    /// <c>luid_0x00000000_0x0000ABCD_engtype_3D</c>. Every Windows 10 2004+ machine leads
+    /// with the process that owns the engine instead - this machine's counters, read
+    /// directly on 17 October, spell it <c>pid_10864_luid_0x00000000_0x00012997_phys_0_eng_0_engtype_3D</c>
+    /// across 541 rows - and the parser that assumed the documented shape rejected all of
+    /// them, which is why GPU load read zero here forever.
+    /// </para>
+    /// <para>
+    /// The adapter is named by the two hex tokens after the <c>luid_</c> marker in both
+    /// families, so the parser finds that marker wherever it stands instead of trusting the
+    /// name's first token. The same rule keys the adapter-memory rows, which carry the same
+    /// pair, so a load row and its memory row find each other.
+    /// </para>
+    /// </remarks>
     public static string? ExtractAdapterLuid(string instanceName)
     {
-        // e.g. "luid_0x00000000_0x0000ABCD_engtype_3D"
-        if (!instanceName.StartsWith("luid_", StringComparison.OrdinalIgnoreCase))
+        var at = instanceName.IndexOf("luid_", StringComparison.OrdinalIgnoreCase);
+        if (at < 0)
             return null;
 
-        var first = instanceName.IndexOf('_', 4);
+        var start = at + "luid_".Length;
+        var first = instanceName.IndexOf('_', start);
         if (first < 0)
-            return null;
+            return instanceName[at..];
 
         var second = instanceName.IndexOf('_', first + 1);
-        if (second < 0)
-            return instanceName;
-
-        return instanceName[..second];
+        return second < 0 ? instanceName[at..] : instanceName[at..second];
     }
 
     /// <summary>Per-adapter VRAM usage from <c>\GPU Adapter Memory(*)</c>, when available.</summary>

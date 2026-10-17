@@ -61,7 +61,7 @@ class MainActivity : FlutterActivity() {
                     channels = (call.argument<Number>("channels") ?: 2).toInt(),
                     result = result,
                 )
-                "write" -> write(call.argument<ByteArray>("data"), result)
+                "write" -> write(call.arguments, result)
                 "stop" -> stop(result)
                 else -> result.notImplemented()
             }
@@ -137,7 +137,24 @@ class MainActivity : FlutterActivity() {
         result.success(null)
     }
 
-    private fun write(bytes: ByteArray?, result: MethodChannel.Result) {
+    private fun write(arguments: Any?, result: MethodChannel.Result) {
+        // The wire contract is the bare byte array: Dart sends the PCM buffer AS the arguments,
+        // not wrapped in a map (pinned by test/audio/audio_wire_test.dart). The map spelling is
+        // accepted beside it for symmetry with `start`, but the bare form is what ships.
+        //
+        // This normalisation is the fix for the silence the field reported and no counter
+        // explained: the previous lookup, `call.argument<ByteArray>("data")`, requires the
+        // arguments to be a Map and threw ClassCastException on every single write when they
+        // were the bare array Dart actually sends. The exception surfaced nowhere - the write
+        // futures are not awaited on the Dart side, so there was no error, no log line reaching
+        // the user, only a track opened and never fed. Measured in the field on 17 October: the
+        // PC captured and forwarded 2281 real frames (the loopback probe proves the capture
+        // carries signal), the phone's meter counted them, and the speaker stayed silent.
+        val bytes = when (arguments) {
+            is ByteArray -> arguments
+            is Map<*, *> -> arguments["data"] as? ByteArray
+            else -> null
+        }
         if (bytes == null || bytes.isEmpty() || !running) {
             // Not running: the frame arrived after a stop. Dropping it is correct - there is no
             // track to play it into, and opening one here would resurrect audio the user turned

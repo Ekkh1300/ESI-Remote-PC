@@ -14,25 +14,26 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  56659EE0896BA30BA7210B03B86702BB7307FC02886E6E5F630AF0081436B05C
-ESI-RemotePC-1.0.1.apk             E5EEA5BCBE67947E0F951A58DACACE14EF7461055128C8C1597CD4B3C64D0DF9
+ESI-RemotePC-Setup-1.0.1-x64.exe  2454F372BAD469A0D6D82B79FDD282D8508D4A05827904A71AF89136446D0792
+ESI-RemotePC-1.0.1.apk             470DCBF82A67BE9C65CB9CE1ABF7E4ABBBFC19A74BE8083BD20A8B8061D4A08C
 ```
 
 Both hashes change whenever their side of the project changes. If you downloaded an earlier copy of
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 8. **The installer changed** because the CLI the installer
-ships was walking two broken roads - `esirc install` registering a shape the SCM rejects, and
-`esirc uninstall` leaving the helper's logon task behind - and because the session agent's input
-close-out now releases held mouse buttons with the keys it already released. **The APK changed**
-because the Dart tree changed: the speaker switch now tells the truth about a dropped connection
-and measures the silence it is asked to carry, the tap test sends a complete click, and the PC
-list is reachable again once a phone is paired. Rebuilding either file reproduces these hashes.
+Both files have moved since prerelease 9. **The installer changed** because the GPU Engine
+instance names Windows actually writes - `pid_…_luid_…`, measured on 541 rows of this machine's
+own counters - were all rejected by a parser that only accepted the documented
+`luid_…`-leading shape, so the GPU channel read zero on every modern Windows machine. **The APK
+changed** because the Android host refused every audio write the Dart side sent: the bytes
+arrive as the arguments themselves, the host looked them up as a Map entry and threw
+ClassCastException on all 2 281 of them - an open track, a climbing meter, and total silence.
+Rebuilding either file reproduces these hashes.
 
 ## What this build fixes
 
-Twenty-three, each measured rather than suspected.
+Twenty-five, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -74,6 +75,20 @@ readings" when only one has, which is the state a person actually meets in the s
 connecting and the one that most looks like a broken graph. The chain that draws it - the PC's
 own history, the snapshot that carries it, the window the phone accumulates, the three channels
 and the painter that needs two points - had no tests at all.
+
+**And the GPU channel read zero on every Windows 10 2004+ machine.** The aggregate groups the
+`\GPU Engine(*)\Utilization Percentage` instances by the adapter's LUID, extracted from names
+the documentation spells `luid_0x00000000_0x0000ABCD_engtype_3D` - leading with the adapter.
+Windows 10 2004+ leads with the owning process instead: measured on this machine's counters,
+all 541 engine rows are spelled `pid_10864_luid_0x00000000_0x00012997_phys_0_eng_0_engtype_3D`,
+and the extractor that required the name to *start* with `luid_` rejected every one - the
+aggregate came back empty and GPU load read zero forever, on a healthy machine with a working
+counter. The probe that decided the counter existed leaned on the same evidence and lied the
+same way: the wildcard *expand* reported one instance where the counter's own read enumerates
+541. Availability is now the add call itself, and the extractor finds the `luid_` marker
+wherever it stands, so both spellings - and the adapter-memory rows the memory pairing keys by
+- land on one adapter key. Measured after the fix: two adapters aggregate, the primary at
+14.79 % while a window moved. *(D85)*
 
 **Rename and Delete in the Files screen did nothing.** Each menu item popped its own sheet and
 then handed the action *the sheet's* context. The action awaits a confirmation dialog, and by the
@@ -238,6 +253,21 @@ the two lines that answer the afternoon's unanswerable report - the PC is sendin
 something on the PC), or the stream itself has stopped. Two phones worth of sessions were read
 out of the PC's own logs to find where each half of the story broke; the details are in
 [`docs/RELEASE-NOTES-1.0.1.md`](../docs/RELEASE-NOTES-1.0.1.md). *(D81, D82)*
+
+**And the track that was opened was never fed a single byte.** The October 17 session named the
+last silence by subtraction: the PC's loopback capture was measured directly on the machine
+that reported hearing nothing - a 440 Hz probe tone through the default output while the exact
+capture configuration the agent uses peaked at 8 704 of 32 768 - so the PC half captured real
+signal and forwarded it, 2 281 frames reaching the phone's socket with the meter counting them.
+What remained was the phone's own playback, and the defect was one wire contract read
+differently at each end: Dart sends the PCM buffer as the *arguments themselves* of the
+`write` call (pinned by `test/audio/audio_wire_test.dart`), while the Android host looked the
+bytes up as `call.argument<ByteArray>("data")` - a lookup that requires the arguments to be a
+Map and throws ClassCastException on a bare array. Every one of those 2 281 writes died before
+its bytes reached the queue, and nothing surfaced: the write futures are not awaited on the
+Dart side, so there was no error and no log line reaching the user - an open track, a climbing
+meter, and total silence. The host now normalises the argument: the bare array is accepted as
+the payload, and a Map spelling beside it for symmetry with `start`. *(D86)*
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only
@@ -409,7 +439,7 @@ would let an attacker finish a pairing they started themselves.
 
 Worth reading before you trust this on a real machine.
 
-**Verified by running it.** The Windows build is green end to end: 447 unit and integration
+**Verified by running it.** The Windows build is green end to end: 453 unit and integration
 tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
 that was repeated from the delivered installer file. The Android side is 310 Dart tests, and
 — the part that matters — a live check that starts a throwaway agent and drives the app's

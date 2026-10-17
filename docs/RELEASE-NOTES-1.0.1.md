@@ -207,6 +207,23 @@ carry. A count that stops climbing says the stream itself has stopped. Both line
 the same numbers that used to be invisible, and both are measured on the phone, in numbers it
 received, rather than inferred from states two machines away. *(D82)*
 
+**And the track that was opened was never fed a single byte.** The October 17 session finally
+named the remaining silence by subtraction. The PC's loopback capture was measured directly on
+the machine that reported hearing nothing — a 440 Hz probe tone played through the default
+output while the exact WASAPI loopback configuration `AudioPump` uses captured it at a peak of
+8 704 of 32 768 — so the PC half captures real signal and forwards it (2 281 frames reached the
+phone's socket; the meter counted them; the track reported open). What remained was the phone's
+own playback, and the defect was a wire contract read differently at each end. Dart sends the
+PCM buffer as the *arguments themselves* of the `write` call — pinned by
+`test/audio/audio_wire_test.dart` — while the MainActivity host looked the bytes up as
+`call.argument<ByteArray>("data")`, a lookup that requires the arguments to be a Map and throws
+ClassCastException on a bare array. Every one of those 2 281 writes died before its bytes
+reached the queue, and the exception surfaced nowhere: the write futures are not awaited on the
+Dart side, so there was no error and no log line reaching the user — an open track, a climbing
+packet meter, and total silence. The host now normalises the argument: a bare ByteArray is
+accepted as the payload (the shape that ships), and a Map spelling is accepted beside it for
+symmetry with `start`. *(D86)*
+
 **What is not claimed.** Verified in the same way as before — wire format pinned to the PC
 encoder's constants, the native player present in the built APK — plus what the October 16
 sessions on two real phones established mechanically: `audio.start` reaches the PC and the PC
@@ -306,6 +323,23 @@ The chain that draws it — the PC's own history, the snapshot that carries it, 
 phone accumulates, the three channels and the painter that needs two points — had no tests at
 all. Every link was individually correct and the order they run in had never been measured.
 *(D66)*
+
+**And the GPU channel read zero on every Windows 10 2004+ machine, because of one string
+assumption.** The per-engine aggregate groups the `\GPU Engine(*)\Utilization Percentage`
+instances by the adapter's LUID, extracted from names the documentation spells
+`luid_0x00000000_0x0000ABCD_engtype_3D` — leading with the adapter. Windows 10 2004+ leads with
+the owning process instead: measured directly on this machine's counters, all 541 engine rows
+are spelled `pid_10864_luid_0x00000000_0x00012997_phys_0_eng_0_engtype_3D`, and the extractor
+that required the name to *start* with `luid_` rejected every one of them. The aggregate came
+back an empty list, GPU load read zero, and the phone's GPU channel had nothing to draw —
+forever, on a healthy machine with a working counter. The probe that decided whether the
+counter existed at all leaned on the same family of evidence and lied the same way: the
+wildcard *expand* reported one instance where the same counter's read enumerates 541.
+Availability is now the add call itself — `PdhAddEnglishCounter` succeeds exactly where the
+counter object exists, in any locale — and the extractor finds the `luid_` marker wherever it
+stands, so both spellings, and the adapter-memory rows that the memory pairing keys by, land on
+one adapter key. Measured after the fix on the same machine: two adapters aggregate, the
+primary reading 14.79 % while a window moved. *(D85)*
 
 ## Navigation
 
@@ -553,7 +587,7 @@ handset.
 
 ## Verification
 
-- 447 C# tests, 315 Dart tests, all passing
+- 453 C# tests, 315 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
@@ -586,6 +620,15 @@ handset.
   `Actual: "not installed"`
 - The usage graph's whole path — PC history, snapshot, accumulated window, three channels,
   painter — is measured end to end by `test/state/metrics_history_test.dart`
+- The GPU instance-name parser is pinned by six tests in `GpuInstanceNameTests.cs` against the
+  two spellings the field actually writes — the process-leading shape measured on this machine
+  (541 rows, all `pid_…_luid_…`) and the documented adapter-leading one — plus the
+  adapter-memory row that must key identically for the memory pairing, the no-pair fallback,
+  and a name without a LUID; the first test fails against the pre-D85 extractor with
+  `Expected: luid_0x00000000_0x00012997 / Actual: <null>`
+- The audio `write` contract is pinned on the Dart side by `test/audio/audio_wire_test.dart`
+  (the arguments are the bytes themselves), and the MainActivity host now accepts both
+  spellings — the ClassCastException the old host raised on every write is the D86 story above
 - Full screen is measured by `test/ui/fullscreen_test.dart`, including which widget answers a
   tap that lands on the status bar
 

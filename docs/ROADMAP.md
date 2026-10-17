@@ -59,7 +59,7 @@ The following is implemented, covered by tests, and exercised by the smoke test.
 | PC audio captured on the loopback endpoint and played on the phone over the WebSocket | `AudioPump.cs`, hub 0x04 audio frames, phone `PhoneSpeaker` |
 | `esirc` administration CLI | `ESI.RemotePc.Agent.Cli` |
 | Helper install and uninstall through the logon task, one code path shared with the installer | `TaskCommands.RegisterSessionAgentTask`, `ServiceManager.Install` / `Uninstall` |
-| 447 test methods — 38 crypto, 32 sandbox, 21 HTTP integration including a full middleware-pipeline harness | `ESI.RemotePc.Tests` |
+| 453 test methods - 38 crypto, 32 sandbox, 21 HTTP integration including a full middleware-pipeline harness | `ESI.RemotePc.Tests` |
 | A smoke test that boots the published binary and runs 13 checks | `tests/smoke-test.ps1` |
 
 ---
@@ -290,6 +290,8 @@ Listed so a future change does not reintroduce them.
 | Serial and scope checks are constant-time | `EsiCrypto.SignatureEquals` | Not a micro-optimisation concern; it is the difference between "a wrong signature fails" and "a wrong signature fails slowly" |
 | The rate limiter refills continuously rather than in fixed windows | `RateLimiter.TryConsume` | A fixed window gives a client 2× the budget across the boundary |
 | `AuditLog.Record` swallows exceptions | `AuditLog.Record` | An audit failure must not take down the operation being audited. This is a real trade, and it is stated in [`SECURITY.md`](SECURITY.md) §10 |
+| The GPU Engine extractor accepts both instance families — the documented `luid_…`-leading one and Windows 10 2004+'s `pid_…_luid_…` — and availability comes from the counter add, not the wildcard expand | `SystemSampler.ExtractAdapterLuid`, `ProbeGpuEngineOnce` | Modern Windows writes all 541 of its engine rows process-leading; a parser that assumed the documented shape read GPU load as zero on a healthy machine, and an expand-based probe reports 1 instance where the read enumerates 541 |
+| The audio `write` payload crosses the platform channel as the bare byte array, and the host accepts both spellings | `phone_speaker.dart` `_write`, `MainActivity.write` | A host that looks the bytes up as a Map entry throws ClassCastException on every write, and because the write futures are unawaited the failure surfaces nowhere — an open track, a climbing meter, total silence |
 
 ---
 
