@@ -29,6 +29,11 @@ coverage*.json
 # failure message so anyone hitting that knows where to get it.
 _wire/
 
+# The golden comparator's per-failure images. They describe a test run that has already
+# happened, and committing one would ship a stale diff over the fix it used to describe;
+# the goldens themselves are versioned, and a failure regenerates this directory.
+android-app/**/test/ui/failures/
+
 # NuGet
 *.nupkg
 *.snupkg

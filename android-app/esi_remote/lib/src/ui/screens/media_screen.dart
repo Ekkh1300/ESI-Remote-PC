@@ -13,6 +13,7 @@ import '../theme.dart';
 import '../widgets/panel.dart';
 import '../widgets/setting_slider.dart';
 import '../widgets/states.dart';
+import '../../audio/phone_speaker.dart';
 
 /// Media control, and the rest of the "small controls" tab.
 ///
@@ -196,6 +197,12 @@ class _VolumePanel extends ConsumerWidget {
 /// "should the PC be sending its sound here at all" - the same question the panel above asks
 /// about volume - and a switch says that a whole-machine routing decision is being made, where
 /// a play button would suggest a track is about to start.
+///
+/// The meter underneath is the answer to the question the first real session left hanging:
+/// eighteen seconds of stream during which the PC captured four hundred packets, the user
+/// heard nothing, and neither the PC (it was faithfully capturing a silent mixer) nor the
+/// phone (it was faithfully playing them) was lying. A meter that says "the PC is sending
+/// silence - nothing is playing on it" turns that hour of unexplained quiet into a sentence.
 class _SpeakerPanel extends ConsumerWidget {
   const _SpeakerPanel();
 
@@ -203,13 +210,15 @@ class _SpeakerPanel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(speakerProvider);
     final notifier = ref.read(speakerProvider.notifier);
-    final live = state == SpeakerState.on || state == SpeakerState.starting;
+    final live =
+        state == SpeakerState.on || state == SpeakerState.starting || state == SpeakerState.reconnecting;
 
     return EsiPanel(
       title: 'This phone as the PC speaker',
       severity: switch (state) {
         SpeakerState.on => Severity.nominal,
         SpeakerState.starting => Severity.unknown,
+        SpeakerState.reconnecting => Severity.unknown,
         SpeakerState.failed => Severity.elevated,
         SpeakerState.off => Severity.unknown,
       },
@@ -223,18 +232,22 @@ class _SpeakerPanel extends ConsumerWidget {
             children: <Widget>[
               Expanded(
                 child: OutlinedButton.icon(
-                  // Starting is left tappable so a failed attempt can be retried, but the
-                  // button reports what it is doing rather than appearing stuck.
+                  // A running attempt is not tappable so a double-tap cannot open two tracks,
+                  // but a reconnecting one is: the wait behind it belongs to the user. Tapping
+                  // it stops the speaker and stops the auto-resume it was waiting on.
                   onPressed: state == SpeakerState.starting
                       ? null
                       : () => live ? notifier.stop() : notifier.start(),
                   icon: Icon(
-                    live ? Icons.stop : Icons.speaker_phone,
+                    live && state != SpeakerState.reconnecting
+                        ? Icons.stop
+                        : Icons.speaker_phone,
                     size: 16,
                   ),
                   label: Text(switch (state) {
                     SpeakerState.on => 'Stop playing here',
                     SpeakerState.starting => 'Opening…',
+                    SpeakerState.reconnecting => 'Reconnecting…',
                     SpeakerState.failed => 'Try again',
                     SpeakerState.off => 'Play the PC here',
                   }),
@@ -242,17 +255,78 @@ class _SpeakerPanel extends ConsumerWidget {
               ),
             ],
           ),
-          if (state == SpeakerState.failed && notifier.message != null) ...<Widget>[
+          if (state != SpeakerState.off) _SpeakerMeter(tickerKey: state),
+          if ((state == SpeakerState.failed || state == SpeakerState.reconnecting) &&
+              notifier.message != null) ...<Widget>[
             const SizedBox(height: EsiSpace.sm),
             Text(
               notifier.message!,
-              style: EsiType.body.copyWith(color: EsiPalette.flare, fontSize: 11),
+              style: EsiType.body.copyWith(
+                color: state == SpeakerState.failed ? EsiPalette.flare : EsiPalette.faint,
+                fontSize: 11,
+              ),
             ),
           ],
         ],
       ),
     );
   }
+}
+
+/// The one line under the speaker button that reads the speaker's own counters.
+///
+/// Ticked once a second by [EsiTicker] rather than driven by the stats notifier's stream,
+/// because the state most worth showing - "the packets stopped arriving" - is the one
+/// update that cannot fire a rebuild: nothing arrives to announce its own absence.
+/// One-second ticks turn a stalled stream into words within a second of it stalling,
+/// which the notifier alone could never do.
+class _SpeakerMeter extends ConsumerWidget {
+  const _SpeakerMeter({required this.tickerKey});
+
+  /// Rebuilds the ticker (and resets its counter) when the speaker state changes, so a
+  /// fresh session never opens with a line left over from the previous one.
+  final SpeakerState tickerKey;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => EsiTicker(
+        key: ValueKey<SpeakerState>(tickerKey),
+        interval: const Duration(seconds: 1),
+        builder: (context, tick) {
+          final s = ref.read(phoneSpeakerProvider).stats.value;
+          if (s.packets == 0 && s.dropped == 0) return const SizedBox.shrink();
+          return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const SizedBox(height: EsiSpace.sm),
+                  Text(
+                    '${s.packets} packets received'
+                    '${s.dropped > 0 ? ', $s.dropped skipped while opening' : ''} · '
+                    '${s.sampleRate ?? '?'} Hz ${s.channels ?? '?'} ch',
+                    style: EsiType.mono.copyWith(fontSize: 10, color: EsiPalette.faint),
+                  ),
+                  if (s.lastPacketAt != null &&
+                      DateTime.now().difference(s.lastPacketAt!) > const Duration(seconds: 3) &&
+                      s.running) ...<Widget>[
+                    const SizedBox(height: EsiSpace.xs),
+                    Text(
+                      'The sound stream has stopped arriving. The PC connection is probably '
+                      'down; the switch above will follow it - and reconnect it - automatically.',
+                      style: EsiType.body.copyWith(color: EsiPalette.flare, fontSize: 11),
+                    ),
+                  ] else if (s.saysSilence) ...<Widget>[
+                    const SizedBox(height: EsiSpace.xs),
+                    Text(
+                      'Silence. The PC is capturing correctly, but it is not playing anything '
+                      'right now, so there is nothing to send. Play something on the PC and '
+                      'it will appear here within a second or so.',
+                      style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 11),
+                    ),
+                  ],
+                ],
+              );
+        },
+      );
 }
 
 /// Says what went wrong and offers to try again, in place of a spinner that never resolves.

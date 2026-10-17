@@ -27,6 +27,13 @@ was not where you were told to look. The pin is now read from this phone's own s
 of the PC it has already paired with — never fetched over the network, because a pin that
 arrives over the connection it is supposed to authenticate is not a pin. *(D53, D48)*
 
+**And a paired PC could never be removed from the phone.** A pairing is stored on both ends and
+one of them is a phone where the store grows forever. Row two of the PC list now carries a
+forget action — the same confirm-first shape every destructive control in this app takes — and
+forgetting the PC this phone is on clears the active device too, because a phone pointed at a
+PC it no longer remembers must not keep pretending to be pointed at one. The PC side of the
+pair is untouched; a pairing only dies when its other end is told to forget it as well. *(D84)*
+
 ## The screen
 
 **The screen stream was completely black, and reported that it had worked.** Two separate
@@ -61,6 +68,26 @@ input event reached the PC missing what it needed to be acted on. *(D51)*
 and none carried them up, so one Ctrl+C left the machine holding Ctrl — and the next
 keystroke became a shortcut, with nothing on the phone able to undo it. Shift stayed down and
 typed capitals. The release is sent now, in the reverse order of the press. *(D60)*
+
+**The test tap held the right button down forever.** The Screen panel's "test the tap" control
+sent the PC a right-button *press* and no release — the phone-side click test called
+`button('right', true, …)` with no matching `up`. The PC arrived at its own default for a stuck
+button: the cursor began a right-drag wherever it happened to be, and no context menu ever
+opened, because Windows opens a context menu on a completed click, not on a held one. So the
+control whose one job is proving the touch link works left every PC it touched holding a button
+nobody would release until something else on the phone sent a right-click-shaped message.
+
+Two halves were wrong. The phone's test now sends one complete click — move, down, up — because
+a click is three messages and the test is the only one of the three the phone never measured.
+And the session agent's input pump, which already released *keys* a dying session left held,
+had a separate table for them and none for *buttons*: a session that ended between a down and
+its up left every held mouse button held. Held buttons now ride the same cleanup as held keys —
+one close-out, released in order, on session stop. *(D80)*
+
+The typing panel now says one true line where it used to say nothing: whatever the PC has
+focus on is where typed keys go. It does not focus a window for you — Windows decides that, and
+a panel claiming it steers the PC would be the D80 lesson again — it just stops the "it's not
+working" report whose answer is that Excel, not the desktop, is the window on top.
 
 ## Volume and audio
 
@@ -147,10 +174,48 @@ There is no longer an unqualified "every `audio.state`" getter beside the scoped
 thing being protected against, and a getter nobody is supposed to call is only still sitting
 there to be called.
 
-**What is not claimed.** This has been verified by tests that pin the wire format to the PC
-encoder's own constants, and by building the native player into the APK — but not by listening
-to it. The emulator on the machine that built this will not boot, so the end-to-end path has
-not been heard on a real device. That is why this is a prerelease rather than the 1.0.1 tag.
+**And the switch kept saying "on" over a connection that had died.** The first overnight session
+on a real phone (October 16) settled what actually happens: the phone asked the PC to capture,
+the PC captured — 411 real packets, eight seconds of its own output device — and then the phone
+put its screen to sleep. The socket drops when the phone dozes, the PC's disconnect handler stops
+the capture on its side, and the phone's track keeps waiting on the socket's stream for real
+frames that nobody is sending any more. Under the old state machine all of that left the switch
+reading **on**, with the meter silent and the reason for the silence invisible — the same picture
+whether the PC was playing something or nothing at all, which is precisely what made the
+afternoon's "why don't I hear anything" report unanswerable from the phone.
+
+The switch now tells the truth in that state. A connection dropping mid-play (or mid-start) is
+not treated as a decision: the panel moves to **reconnecting** and says so — "the PC connection
+dropped, so the PC stopped sending its sound. Waiting for it to come back." When the socket
+returns, a speaker that was playing re-requests the capture by itself, without a tap, because
+the drop was nobody's choice and the re-request is the same request continuing. Switching the
+active PC revokes that promise — the re-request belonged to the previous machine's connection —
+and leaves the switch off for the new one. The waiting state is itself tappable: tapping it
+cancels the wait rather than tapping a switch that claims to be playing. *(D81)*
+
+An answer that comes back after yet another drop, or after a stop, or after the PC changed, is
+dropped unread rather than read as a refusal — a refusal of a request nobody owns any more, read
+literally, stops the one state that still has somewhere to go.
+
+**And the panel did not measure anything, so "silence" had no owner.** The new panel now counts
+what it hears: packets arriving, packets dropped, how long since the last one. An incoming
+stream of packets whose samples all sit under the smallest audible threshold for over half a
+second is not a broken link — it is the PC capturing its own quiet output device, and the panel
+now says exactly that: *"the PC is not playing anything"* with the instruction that was missing
+from the afternoon session — sound has to be played on the *PC* for this to have anything to
+carry. A count that stops climbing says the stream itself has stopped. Both lines appear above
+the same numbers that used to be invisible, and both are measured on the phone, in numbers it
+received, rather than inferred from states two machines away. *(D82)*
+
+**What is not claimed.** Verified in the same way as before — wire format pinned to the PC
+encoder's constants, the native player present in the built APK — plus what the October 16
+sessions on two real phones established mechanically: `audio.start` reaches the PC and the PC
+captures and streams its output device (411 packets in eight seconds on the first phone), the
+phone plays and stops without crashing, and the disconnect path ends the capture on the PC side.
+Still not verified — the one thing this feature exists for — is somebody *hearing* the PC's
+sound on the phone while the PC plays something. That is why this is a prerelease rather than
+the 1.0.1 tag, and why the meter exists: the next session will say which of the two silences it
+meets — absent PC sound, or absent stream — instead of leaving the report unanswerable.
 
 **The screen could not be shown full screen.** On a phone the stream was one column of five
 inside a panel — about a hundred pixels tall, with the rest of the display given over to chrome
@@ -262,6 +327,15 @@ above it spanning the full width of a 360-pixel phone. *(D59, D55, D67)*
 **The wordmark ran off the right edge on the first screen.** "ESI Remote PC" at 26px measures
 about 330px, and a 360px phone gave the row 328. The title now takes the space that is
 actually there and shrinks only as far as it has to. *(D60)*
+
+**And once paired, there was exactly one road to the PC list: none.** The pairing screen is
+reachable from the first-run state, and never again — a paired phone that wants to switch
+machines, or forget one, has no control that gets there; the screen exists, the routing exists,
+and the two were joined by nothing. Four entry points now, chosen for where the want actually
+occurs: the machine name in the status bar — the one strip every screen carries — is tappable,
+with a swap glyph saying the row does something; the Settings screen carries a "find or switch
+PC" action beside it; and the pairing screen still opens itself for the phone that has no PC
+at all. *(D83)*
 
 ## Files
 
@@ -376,6 +450,22 @@ that name, which is evidence rather than a guarantee — a process could exist w
 having started it. It is the same signal a person would use by eye, and a stronger one than the
 SCM was giving.
 
+**Two more paths through the installer were still walking the shape the status command
+diagnosed.** `esirc install --include-session-agent` created the helper as a per-user service —
+the same `obj=.` shape the SCM rejects, and that D77 migrated the installer away from. So the
+CLI could produce exactly the machine the status command reports correctly but can never fix
+from that state: a warning, and no working helper. And `esirc uninstall` removed the services
+and left the logon task registered, so the helper — whose whole purpose is to be relaunched at
+sign-in — survived an uninstall and came back at the next boot anyway. An uninstall that leaves
+the thing running is the D74 exit defect wearing a different coat.
+
+Both now go through the task path as their one path: install registers the helper as a logon
+task, the same code the installer itself calls, and uninstall ends the running task first and
+then deletes it. Both are quiet when there is nothing to remove — the second uninstall is
+idempotent, not an error — and both were measured on the machine that reported them: install by
+CLI, task present, helper relaunched at sign-in; uninstall by CLI, task gone, helper gone, a
+second uninstall reporting nothing. *(D79)*
+
 ## The delivery document
 
 **`release/README.md` had 124 mangled characters in it, and had had them since it was written.**
@@ -463,7 +553,7 @@ handset.
 
 ## Verification
 
-- 447 C# tests, 310 Dart tests, all passing
+- 447 C# tests, 315 Dart tests, all passing
 - `flutter analyze` clean
 - APK passes all nine installability checks: well-formed, every advertised ABI real, both
   32-bit libraries handled, signed with APK Signature Scheme v2 and v3, reported intact by
@@ -475,6 +565,20 @@ handset.
 - The speaker switch is measured end to end by `test/state/speaker_state_test.dart`, including the
   stop's answer left in flight under the start's — removing the id filter from D76 makes it fail
   with `Expected: on / Actual: failed`, the false refusal exactly
+- The reconnection supervision of D81 is measured by five tests in `test/state/speaker_state_test.dart`:
+  a live connection dropping mid-play moves the switch to *reconnecting* and names the reason; the
+  socket returning resumes the play without a tap; switching the active PC ends the request instead
+  of replaying it into the new one; an off speaker stays off when the socket cycles; and an answer
+  arriving after a second drop is dropped unread — removing the supervision listener from
+  `audio.dart` makes the first fail with `Expected: on`, the lie D81 closes
+- The build-order guard itself was found by this round's audio work to misread Riverpod's
+  parameterised listener closures — `(previous, next) { … }` — and to pop its scope stack on
+  closes it had never pushed opens for. Both are fixed in `test/provider_build_order_test.dart`,
+  and the guard now sees the same deference every other `ref.listen` body gets
+- `esirc install --include-session-agent` creating the logon task, `esirc uninstall` removing it
+  with the helper gone, and a second uninstall reporting nothing — measured on the machine that
+  reported D79; the installer's cycle (29 checks) runs the same task path through
+  install, reinstall, uninstall and reinstall
 - The tray's Exit decision and the order it shuts the icon down in are pinned by ten tests in
   `SessionAgentStopTests.cs`, each run against the code as it shipped and failing there
 - What `esirc status` reports about the session helper is pinned by eight tests in

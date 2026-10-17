@@ -989,6 +989,19 @@ class _PairedMachines extends ConsumerWidget {
                       ],
                     ),
                   ),
+                  // Forget removes this phone's copy of the pairing: the secret, the pins,
+                  // the address. The PC does not learn about it - revoking actually lives
+                  // there - but a list that keeps every PC the phone ever met grows into
+                  // exactly the "old connections" the user asked to have a way out of.
+                  // An incomplete pairing has nothing worth keeping on either side, and
+                  // its row says so; forgetting it is even more obviously right.
+                  EsiIconAction(
+                    icon: Icons.cancel_schedule_send_outlined,
+                    size: 30,
+                    tooltip: 'Forget this PC on this phone',
+                    onPressed: () => _forget(context, ref, machine),
+                  ),
+                  const SizedBox(width: EsiSpace.xs),
                   if (machine.isPaired)
                     OutlinedButton(
                       style: OutlinedButton.styleFrom(minimumSize: const Size(0, 34)),
@@ -1008,6 +1021,28 @@ class _PairedMachines extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _forget(
+    BuildContext context,
+    WidgetRef ref,
+    PairedMachine machine,
+  ) async {
+    final ok = await EsiConfirmDialog.show(
+      context,
+      title: 'Forget ${machine.displayName}?',
+      body: 'This phone deletes its copy of the pairing - the keys, the pins and the '
+          'address. The PC keeps listing this phone until you revoke or rotate it there; '
+          'pair again if the PC is still the one you want.',
+      confirmLabel: 'Forget',
+    );
+    if (!ok || !context.mounted) return;
+    await ref.read(machineListProvider.notifier).remove(machine.deviceId);
+    if (!context.mounted) return;
+    showOutcome(context, (
+      ok: true,
+      message: 'Forgotten ${machine.displayName} on this phone.',
+    ));
   }
 }
 

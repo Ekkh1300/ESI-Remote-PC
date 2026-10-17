@@ -56,8 +56,10 @@ The following is implemented, covered by tests, and exercised by the smoke test.
 | Gaming mode with exact previous-state restore | `GamingService` |
 | Notification rules with sustain timers and cooldowns | `NotificationEngine`, `NotificationRuleCatalog` |
 | Two Windows services with failure recovery and `requiredPrivileges` | `ServiceManager.cs`, `ESI-RemotePC.iss` |
+| PC audio captured on the loopback endpoint and played on the phone over the WebSocket | `AudioPump.cs`, hub 0x04 audio frames, phone `PhoneSpeaker` |
 | `esirc` administration CLI | `ESI.RemotePc.Agent.Cli` |
-| 91 test methods — 38 crypto, 32 sandbox, 21 HTTP integration including a full middleware-pipeline harness | `ESI.RemotePc.Tests` |
+| Helper install and uninstall through the logon task, one code path shared with the installer | `TaskCommands.RegisterSessionAgentTask`, `ServiceManager.Install` / `Uninstall` |
+| 447 test methods — 38 crypto, 32 sandbox, 21 HTTP integration including a full middleware-pipeline harness | `ESI.RemotePc.Tests` |
 | A smoke test that boots the published binary and runs 13 checks | `tests/smoke-test.ps1` |
 
 ---
@@ -282,6 +284,8 @@ Listed so a future change does not reintroduce them.
 | Sandbox denial is `403`, policy refusal is `200 {ok:false}` | `Endpoints.Guard`, `FileService` | An established split. Changing it breaks clients that branch on status |
 | `AgentOptions.SessionAgentPath` and the pipe DACL are re-derived, not cached across sessions | `SessionAgentBridge` | Fast user switching changes the active user, and therefore the DACL's third ACE |
 | The three executables are published from one build | `build.ps1` | They bake in the same protocol constants. A service and a client that disagree on a wire constant fail at runtime, not at build time |
+| A session close releases the mouse buttons it was holding as well as its keys | `CapturePump.InputPump.ReleaseHeldKeys` | A press without its release turns the desktop into a held drag that no phone can undo |
+| `esirc install` and `uninstall` manage the helper through the logon task, the same path the installer uses | `ServiceManager.Install`, `ServiceManager.Uninstall` | An install that registers a shape the SCM rejects, or an uninstall that leaves the helper relaunching at every sign-in, is a machine nobody can repair from the CLI |
 | `RuntimeIdentifiers` is not set in `Directory.Build.props` | `Directory.Build.props` | It multiplies restore time by the RID count for no benefit in normal development |
 | Serial and scope checks are constant-time | `EsiCrypto.SignatureEquals` | Not a micro-optimisation concern; it is the difference between "a wrong signature fails" and "a wrong signature fails slowly" |
 | The rate limiter refills continuously rather than in fixed windows | `RateLimiter.TryConsume` | A fixed window gives a client 2× the budget across the boundary |

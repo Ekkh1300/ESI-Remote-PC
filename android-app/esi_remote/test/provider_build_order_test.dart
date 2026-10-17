@@ -62,15 +62,17 @@ void main() {
 
   /// True when the line sits inside a closure that `build()` merely schedules.
 ///
-/// `ref.onDispose(() { ... })`, `Future.microtask(() { ... })` and
-/// `scheduleMicrotask(() { ... })` all run after `build()` has returned, so an `unawaited` in
-/// any of them is correct and must not be flagged. Only a call that runs *during* `build()` is
-/// the defect.
+/// `ref.onDispose(() { ... })`, `Future.microtask(() { ... })`,
+/// `scheduleMicrotask(() { ... })` and `ref.listen(..., (…) { ... })` all run after
+/// `build()` has returned, so an `unawaited` in any of them is correct and must not be
+/// flagged. Only a call that runs *during* `build()` is the defect.
   bool inDeferredClosure(List<String> lines, int index) {
-    // Any brace opened above this line inside build() that closes *after* it means the line is
-    // in a nested scope. Tracked with a stack so a closure closed before this line does not
-    // count, which is what made the first version of this flag the fixed sites too.
-    final scopes = <String>[];
+    // Scope tracking that pairs every opened brace with its close. Each brace-open is
+    // marked: a deferred call's own blocks are 'deferred', every other open is 'plain'.
+    // Only counting pushes-and-pops symmetrically is what makes an ordinary `if (...) {`
+    // inside a Riverpod listener unable to end the listener's deference by closing before
+    // the callback does, which is exactly the mis-pairing that flagged the fixed sites.
+    final scopes = <bool>[]; // true == this scope was opened by a deferred call
     var inBuild = false;
     var depth = 0;
 
@@ -83,25 +85,34 @@ void main() {
       if (!inBuild) continue;
 
       final line = lines[i];
+      // `listen` deliberately matches both of this app's two shapes: Riverpod's
+      // `ref.listen(provider, (…) { … })` and a stream's `.listen((…) { … })`. Neither a
+      // Riverpod listener nor a stream subscription callback runs during build - they fire
+      // when their event does - so a body of either is exactly as deferred as a dispose
+      // callback, and the same unawaited() rule that is safe there is safe here.
       final deferred =
-          RegExp(r'(onDispose|scheduleMicrotask|microtask|then|addPostFrameCallback)\s*\(')
+          RegExp(r'(onDispose|scheduleMicrotask|microtask|then|addPostFrameCallback|listen)\s*\(')
               .hasMatch(line);
 
-      // Count what this line opens after any deferred call on it.
-      var net = '{'.allMatches(line).length - '}'.allMatches(line).length;
-      if (deferred) {
-        // Everything from here until this scope closes is deferred.
-        scopes.add('deferred');
-        // A one-liner `() => x` opens nothing; only a `() {` does.
-        if (!RegExp(r'\(\s*\)\s*(async\s*)?\{').hasMatch(line)) scopes.removeLast();
+      // The current line's braces decide what runs at its column only through the scopes
+      // opened *above* it, so membership is read before this line's own opens land. A
+      // deferred line that puts its whole body on itself - `onDispose(() { unawaited(x); });`
+      // - still counts, because those braces balance to net zero and nothing changes.
+      if (i == index) return scopes.contains(true);
+
+      // Apply this line's brace traffic: every open is remembered as deferred or plain,
+      // every close is paired with the most recent open. Even if the two never meet again,
+      // the pairing cannot dull a block that merely interleaves with the callback.
+      for (var o = 0; o < '{'.allMatches(line).length; o++) {
+        scopes.add(deferred);
+        depth++;
       }
-
-      if (i == index) return scopes.contains('deferred');
-
-      depth += net;
-      for (var d = 0; d < -net; d++) {
+      for (var d = 0; d < '}'.allMatches(line).length; d++) {
         if (scopes.isNotEmpty) scopes.removeLast();
+        depth--;
       }
+
+      // build() ended: its closing brace brings depth back to zero.
       if (depth <= 0) inBuild = false;
     }
     return false;

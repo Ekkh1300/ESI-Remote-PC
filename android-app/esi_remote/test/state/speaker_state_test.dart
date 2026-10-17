@@ -44,13 +44,37 @@ class _FakeSocket extends EsiWebSocket {
 
   bool startRequested = false;
 
+  /// How many `audio.start` requests went at the PC in total, so the replay-on-reconnect
+  /// tests can see the fresh request arriving rather than inferring it from a state label.
+  int startRequests = 0;
+
+  /// How many `audio.stop` requests went out, counted rather than asserted by absence:
+  /// "we did not ask a dead socket to stop" is the kind of fact that must be measured.
+  int stopRequests = 0;
+
+  /// The next answer is delivered as a delayed inactive one, whatever the queue said.
+  bool deliverInactiveLate = false;
+
   @override
-  Stream<AudioState> audioStateFor(String requestId) =>
-      _answers.stream.audioStateFor(requestId);
+  Stream<AudioState> audioStateFor(String requestId) {
+    if (deliverInactiveLate) {
+      deliverInactiveLate = false;
+      // One zero-delay later: late enough that the notifier can change state underneath,
+      // early enough that `_settle` catches it, which is the whole shape of the race.
+      return Stream.fromFuture(
+        Future<AudioState>.delayed(
+          Duration.zero,
+          () => const AudioState(active: false),
+        ),
+      );
+    }
+    return _answers.stream.audioStateFor(requestId);
+  }
 
   @override
   void startAudio(String requestId) {
     startRequested = true;
+    startRequests++;
     if (_sent >= _replies.length) return;
 
     final reply = _replies[_sent++];
@@ -60,6 +84,11 @@ class _FakeSocket extends EsiWebSocket {
     // this fix and the reason it is worth testing at all. The id goes back on it the way the
     // real PC echoes it, because the id is what the filter under test reads.
     scheduleMicrotask(() => _answers.add(_stateFrame(requestId, reply)));
+  }
+
+  @override
+  void stopAudio() {
+    stopRequests++;
   }
 
   /// What the PC sends in answer to an `audio.stop` that has not been collected yet: the
@@ -87,14 +116,51 @@ class _FakeSocket extends EsiWebSocket {
 /// reaches the platform channel in these tests. The name is irrelevant; it is never answered.
 const MethodChannel _unusedChannel = MethodChannel('esi_remote/test-speaker');
 
+/// A connection whose socket state the test moves by hand.
+///
+/// The real notifier builds itself from the active machine and the machine store; a speaker
+/// test should not have to boot either. It keeps [ConnectionNotifier]'s own methods, so
+/// `reportSocket` - the same method the app's socket wiring calls - is what the tests use
+/// to move the socket state, meaning the speaker is listening to exactly what it would
+/// listen to in the app.
+class _StaticConnectionNotifier extends ConnectionNotifier {
+  @override
+  ConnectionStatus build() => const ConnectionStatus();
+}
+
+/// The same shape for the selected PC, with a setter the tests drive.
+class _StaticActiveDeviceNotifier extends ActiveDeviceNotifier {
+  @override
+  String build() => '';
+
+  void setDevice(String deviceId) => state = deviceId;
+}
+
 ProviderContainer _containerFor(_FakeSocket socket) => ProviderContainer(
       overrides: [
         webSocketProvider.overrideWithValue(socket),
         phoneSpeakerProvider.overrideWith((ref) => PhoneSpeaker(channel: _unusedChannel)),
+        connectionProvider.overrideWith(() => _StaticConnectionNotifier()),
+        activeDeviceIdProvider.overrideWith(() => _StaticActiveDeviceNotifier()),
       ],
     );
 
+/// Runs the microtask queue enough times for a start attempt and its in-flight answer to
+/// land. Named for what it does to the test's readability, not for Riverpod's pump.
+Future<void> _settle([int rounds = 4]) async {
+  for (var i = 0; i < rounds; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
 void main() {
+  // The supervision path stops the speaker's platform channel when a socket drops and a
+  // PC changes; with no device half of the channel installed, that call throws
+  // MissingPluginException - which stop() catches, but only across a messenger, and the
+  // messenger comes up with the binding. Tests that exercise the stop path therefore need
+  // it, or they die on the binding assert instead of proving what they came to prove.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('a PC that refuses to capture leaves the switch off, and says why', () async {
     const reason =
         "The session agent is not connected, so the PC's audio cannot be captured.";
@@ -167,5 +233,134 @@ void main() {
       isNull,
       reason: 'the phone must not report a refusal the PC never made',
     );
+  });
+
+  test('a PC connection dropping mid-play says so instead of claiming it is playing', () async {
+    // The PC stops the capture the moment the socket dies - that is its disconnect handler
+    // and not a choice the phone makes - so a switch that keeps saying "on" is a panel
+    // claiming success over a stream that has already been ended by the other side. That
+    // is the hour of quiet the morning session of October 16 produced (capture ran four
+    // hundred packets, the phone closed, the switch stayed on).
+    final socket = _FakeSocket(const <AudioState>[AudioState(active: true)]);
+    final container = _containerFor(socket);
+    addTearDown(container.dispose);
+
+    // Arm the supervision the way the app has it by the time anything streams: the socket
+    // has been live, and this drop is live -> gone. Reporting the drop from a never-live
+    // start would take the was-live==is-live shortcut and fire nothing, which is exactly
+    // the shortcut that keeps the guard from lying about benign handshake churn.
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.live);
+
+    final notifier = container.read(speakerProvider.notifier);
+    await notifier.start();
+    expect(container.read(speakerProvider), SpeakerState.on);
+
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.reconnecting);
+    await _settle();
+
+    expect(container.read(speakerProvider), SpeakerState.reconnecting);
+    expect(notifier.message, contains('connection dropped'));
+
+    // The PC is somebody else's business now - the state the socket came back to decides
+    // when this restarts, so a stop request sent into a dead socket is wrong twice.
+    expect(socket.stopRequests, isZero);
+  });
+
+  test('the speaker that was on comes back with the socket, without a new tap', () async {
+    final socket = _FakeSocket(
+      const <AudioState>[AudioState(active: true), AudioState(active: true)],
+    );
+    final container = _containerFor(socket);
+    addTearDown(container.dispose);
+
+    // Live first, for the same reason the drop test arms the supervision with a live
+    // socket: the drop has to be a transition away from live to be seen at all.
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.live);
+
+    final notifier = container.read(speakerProvider.notifier);
+    await notifier.start();
+    expect(container.read(speakerProvider), SpeakerState.on);
+    expect(socket.startRequests, 1);
+
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.reconnecting);
+    await _settle();
+    expect(container.read(speakerProvider), SpeakerState.reconnecting);
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.live);
+    await _settle();
+
+    expect(socket.startRequests, greaterThanOrEqualTo(2),
+        reason: 'the request has to go onto the wire again for the new socket');
+    expect(container.read(speakerProvider), SpeakerState.on);
+  });
+
+  test('a speaker that was off stays off when the socket cycles', () async {
+    final socket = _FakeSocket(const <AudioState>[AudioState(active: true)]);
+    final container = _containerFor(socket);
+    addTearDown(container.dispose);
+
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.reconnecting);
+    await _settle();
+
+    expect(container.read(speakerProvider), SpeakerState.off);
+    expect(socket.startRequests, isZero,
+        reason: 'nothing was ever requested, so nothing may be replayed');
+  });
+
+  test('switching the active PC ends the request instead of replaying it', () async {
+    // Asking one machine to send its sound and then finding that request carried over to
+    // whichever PC the user next selects is not an upgrade - it is capturing audio on a
+    // machine the user never pointed this feature at. The user's yes was scoped to a machine.
+    final socket = _FakeSocket(const <AudioState>[AudioState(active: true)]);
+    final container = _containerFor(socket);
+    addTearDown(container.dispose);
+
+    final notifier = container.read(speakerProvider.notifier);
+    await notifier.start();
+    expect(container.read(speakerProvider), SpeakerState.on);
+
+    (container.read(activeDeviceIdProvider.notifier) as _StaticActiveDeviceNotifier)
+        .setDevice('the-other-pc');
+    expect(container.read(speakerProvider), SpeakerState.off);
+    expect(notifier.message, isNull);
+
+    // And it stays off across the socket churn the switch is about to cause - no replay.
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.live);
+    await _settle();
+    expect(container.read(speakerProvider), SpeakerState.off);
+  });
+
+  test('an answer that arrives after the connection dropped again does not cancel the wait',
+      () async {
+    final socket = _FakeSocket(
+      const <AudioState>[AudioState(active: true), AudioState(active: true)],
+    );
+    final container = _containerFor(socket);
+    addTearDown(container.dispose);
+
+    final notifier = container.read(speakerProvider.notifier);
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.live);
+    await notifier.start();
+    expect(container.read(speakerProvider), SpeakerState.on);
+
+    // The connection drops, the socket returns, the automatic restart goes out - and the
+    // machine drops again while that restart's answer is in flight. The answer that then
+    // lands describes a capture the disconnect handler has already killed; reading it as
+    // the restart's own refusal would turn a wait into a dead end, and the wait is the
+    // one state that still has a rubber to outrun.
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.reconnecting);
+    await _settle();
+    expect(container.read(speakerProvider), SpeakerState.reconnecting);
+
+    // Both reports go out synchronously, back to back, deliberately: the time between
+    // "restart starts" and "the answer lands" is 1 microtask round, and the test has to
+    // hold the same order no matter how the runner interleaves its own microtasks.
+    socket.deliverInactiveLate = true;
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.live);
+    container.read(connectionProvider.notifier).reportSocket(EsiSocketState.reconnecting);
+    await _settle();
+
+    expect(container.read(speakerProvider), SpeakerState.reconnecting,
+        reason: 'the late answer belongs to the re-drop, not to the restart');
+    expect(notifier.message, contains('connection dropped'));
   });
 }

@@ -108,7 +108,14 @@ internal static class ServiceManager
     // Install
     // -----------------------------------------------------------------------------
 
-    /// <summary>Installs both services, configured for automatic start with recovery.</summary>
+    /// <summary>
+    /// Installs the session-0 service, configured for automatic start with recovery, and -
+    /// with <c>--include-session-agent</c> - the per-user session helper's logon task.
+    /// <para>
+    /// The task, not a second service: see the comment on the helper below for why the
+    /// per-user service form was a warning followed by no helper.
+    /// </para>
+    /// </summary>
     public static int Install(InstallOptions options)
     {
         var serviceExe = options.ServicePath ?? ResolveSibling(ServiceExe);
@@ -162,35 +169,33 @@ internal static class ServiceManager
                 Console.WriteLine($"  warning: the service did not start ({start.Output.Trim()})");
         }
 
-        // ---- The interactive-session service --------------------------------------
+        // ---- The interactive-session helper ----------------------------------------
+        //
+        // This used to be a second Windows service, created with obj= "." - the per-user
+        // form the TaskCommands help text describes as "an empty obj=, which the SCM
+        // rejects". CreateService got a warning printed after it and no helper afterwards:
+        // an `esirc install --all` machine had screen capture, input injection and the
+        // pairing prompt on none of its sessions, and the only hint was one console line.
+        //
+        // So the CLI now does what the Inno Setup installer has always done: register the
+        // logon task, by calling into the exact code `esirc task register` runs. The helper
+        // belongs to whoever is at the keyboard (winsta0\default, SendInput, the pairing
+        // prompt), a task is the supported way to run an .exe there, and RegisterCore
+        // starts it immediately too, so signing in was not required for it to exist.
         if (options.IncludeSessionAgent)
         {
-            // ServiceUserName = "." means "the LocalService-style per-user service model": the
-            // SCM starts one instance of this service in each interactive session, which is
-            // exactly the lifetime the session agent needs. It cannot be a per-machine service
-            // because it has to be in the user's session to reach winsta0\default.
-            if (CreateService(
-                    ProtocolConstants.SessionServiceName,
-                    "ESI Remote PC Session Agent",
-                    sessionExe,
-                    account: ".",
-                    start: ServiceStartMode.Automatic,
-                    description: "Per-user helper for ESI Remote PC. Screen capture, input injection, and the pairing prompt.",
-                    out var createSession))
+            var registered = TaskCommands.RegisterSessionAgentTask();
+            if (registered != 0)
             {
-                Console.WriteLine($"  created {ProtocolConstants.SessionServiceName}");
-            }
-            else
-            {
-                Console.WriteLine($"  warning: the session agent service was not created ({createSession})");
+                Console.Error.WriteLine(
+                    "  warning: the session agent's logon task was not registered. Screen " +
+                    "capture, input injection and the pairing prompt will be unavailable on " +
+                    "this machine until 'esirc task register' succeeds.");
             }
         }
 
         ConfigureRecovery(ProtocolConstants.ServiceName, options.RestartCount, options.RestartDelaySeconds);
         SetRequiredPrivileges(ProtocolConstants.ServiceName, ["SeTcbPrivilege", "SeShutdownPrivilege", "SeAssignPrimaryTokenPrivilege"]);
-
-        if (options.IncludeSessionAgent)
-            SetRequiredPrivileges(ProtocolConstants.SessionServiceName, ["SeIncreaseQuotaPrivilege"]);
 
         Console.WriteLine();
         Console.WriteLine("Installed. The agent is listening on https://localhost:" +
@@ -327,8 +332,17 @@ internal static class ServiceManager
     {
         Console.WriteLine("Removing ESI Remote PC...");
 
+        // The legacy per-user service row, if an old CLI install managed to leave one; then
+        // the session-0 service. The session helper itself is neither of them - it is a
+        // scheduled task - which is why the two calls below are part of the same uninstall.
+        // They used to be missing, and an uninstall that ended in "Uninstalled." while the
+        // helper ran on and re-registered itself at the next sign-in was one lie in three
+        // ways: the row, the status text, and the task.
         StopAndDelete(ProtocolConstants.SessionServiceName);
         StopAndDelete(ProtocolConstants.ServiceName);
+
+        TaskCommands.StopSessionTask();
+        TaskCommands.RemoveSessionTask();
 
         if (keepData)
         {

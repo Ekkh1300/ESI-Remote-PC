@@ -14,23 +14,25 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  C26F6ED2EE43B48537A505F823DF69529DBD2A7CE0810BF95198092F5F50FD54
-ESI-RemotePC-1.0.1.apk             45EDE4278F43756CC418EEF79F0567545E112C574ACD9C78C3C75ABC99213850
+ESI-RemotePC-Setup-1.0.1-x64.exe  56659EE0896BA30BA7210B03B86702BB7307FC02886E6E5F630AF0081436B05C
+ESI-RemotePC-1.0.1.apk             E5EEA5BCBE67947E0F951A58DACACE14EF7461055128C8C1597CD4B3C64D0DF9
 ```
 
 Both hashes change whenever their side of the project changes. If you downloaded an earlier copy of
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 7, and not the same way. **The installer changed** because
-D77 below is in the CLI the installer ships, so it was rebuilt and re-packed. **The APK did not
-and is byte-identical to prerelease 7's** - nothing in Dart changed between them, so it is the
-same file rather than a rebuilt one, and rebuilding it would have produced a different hash over
-the same code.
+Both files have moved since prerelease 8. **The installer changed** because the CLI the installer
+ships was walking two broken roads - `esirc install` registering a shape the SCM rejects, and
+`esirc uninstall` leaving the helper's logon task behind - and because the session agent's input
+close-out now releases held mouse buttons with the keys it already released. **The APK changed**
+because the Dart tree changed: the speaker switch now tells the truth about a dropped connection
+and measures the silence it is asked to carry, the tap test sends a complete click, and the PC
+list is reachable again once a phone is paired. Rebuilding either file reproduces these hashes.
 
 ## What this build fixes
 
-Eighteen, each measured rather than suspected.
+Twenty-three, each measured rather than suspected.
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74
@@ -190,6 +192,17 @@ whether a legacy service is still there (`esirc install` still makes one, and re
 absent would be the same defect the other way), then whether the task is registered, then whether
 the helper is running: `ESIRemotePcSession  running (pid 23548)`.
 
+**Two more roads through the CLI still walked what the status command diagnosed.** `esirc install
+--include-session-agent` created the helper as the per-user service the SCM rejects - the exact
+shape D77 migrated the installer away from - leaving a machine where the CLI's own installer warns
+and the helper never works. And `esirc uninstall` removed the services but never the logon task,
+so the helper, whose whole purpose is relaunching at sign-in, survived an uninstall and came back
+at the next boot anyway. Both now go through the task path the installer uses: install registers
+it, uninstall ends the running task first and deletes it, and both are quiet when there is
+nothing to remove. Measured on the machine that reported it: CLI install registers the task and
+the helper relaunches at sign-in; CLI uninstall takes task, helper and services with it; a second
+uninstall reports nothing. *(D79)*
+
 **The release script checked an APK that did not have the fixes in it.** `build.ps1` never builds
 the APK - it finds one and runs nine installability checks over it, and those check the package's
 *shape*: well-formed, ABIs present and real, signed v2/v3, minSdk 24. None of them can tell what
@@ -199,6 +212,32 @@ reported nine green PASSes for a package built the previous morning containing n
 the installer carried the agent's half correctly - so the release would have looked complete while
 the phone half was the build before it. It now refuses an APK older than the newest file under
 `lib/` and says what to run.
+
+**The Screen panel's tap test held the PC's right button down forever.** It sent a right-button
+*press* with no release, so every screen it "tested" went into a right-drag that no phone could
+undo, and the context menu Windows shows on a *completed* click never came. The phone now sends
+one complete click - move, down, up - and the session agent's input close-out, which already
+released held *keys* when a session ended, releases held *buttons* with them, so a press without
+its release cannot outlive the session that made it. *(D80)*
+
+**Once paired, there was no road back to the PC list.** The pairing screen is reachable from the
+first-run state and never again - a paired phone that wants to switch or forget machines had no
+control that goes there. The machine name in the status bar - the one strip every screen carries -
+is now tappable, with a swap glyph saying the row does something; Settings carries a **find or
+switch PC** action; and the PC list rows themselves each have a forget control, confirm-first,
+which clears the active device when it forgets the PC the phone is on. *(D83, D84)*
+
+**And the speaker told the truth about a connection that died.** The prerelease above found its
+first real-phone session on October 16: the PC captured eight seconds of its own output device,
+the phone dozed, the socket dropped, the PC's disconnect handler stopped the capture - and the
+phone's switch stayed **on** over a stream that nobody was sending, with no way on the phone to
+tell "the PC is not playing anything" from "the stream has stopped". A drop now moves the switch
+to **reconnecting** with the reason, the socket's return re-requests the capture without a tap,
+a PC switch revokes that promise, and a meter counts what actually arrives: packets, drops, and
+the two lines that answer the afternoon's unanswerable report - the PC is sending *silence* (play
+something on the PC), or the stream itself has stopped. Two phones worth of sessions were read
+out of the PC's own logs to find where each half of the story broke; the details are in
+[`docs/RELEASE-NOTES-1.0.1.md`](../docs/RELEASE-NOTES-1.0.1.md). *(D81, D82)*
 
 Both were cut down from what they were. The installer went from 129.7 MB and the APK from
 183.3 MB; the reasons are in `docs/BUILD.md` and below, because "it is smaller" is only

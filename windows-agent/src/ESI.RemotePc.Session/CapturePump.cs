@@ -312,6 +312,7 @@ internal sealed class InputPump
     private readonly SemaphoreSlim _wake = new(0);
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<string> _heldKeys = [];
+    private readonly List<string> _heldButtons = [];
 
     private Thread? _thread;
     private int _screenWidth;
@@ -409,34 +410,69 @@ internal sealed class InputPump
     /// </summary>
     private void TrackHeldKey(Esi.Protocol.RemoteInputRequest input)
     {
-        if (!input.Kind.Equals("key", StringComparison.OrdinalIgnoreCase) || input.Code is null)
-            return;
-
-        if (input.Down != true)
+        if (input.Kind.Equals("key", StringComparison.OrdinalIgnoreCase) && input.Code is not null)
         {
-            _heldKeys.Remove(input.Code);
+            if (input.Down != true)
+            {
+                _heldKeys.Remove(input.Code);
+                return;
+            }
+
+            if (!_heldKeys.Contains(input.Code))
+            {
+                _heldKeys.Add(input.Code);
+
+                if (_heldKeys.Count > 16)
+                    _log.Warning("More than 16 keys are held down; the input state is probably wrong");
+            }
+
             return;
         }
 
-        if (!_heldKeys.Contains(input.Code))
-        {
-            _heldKeys.Add(input.Code);
+        // The same trap has a mouse-shaped hole. A phone event that presses a button but
+        // never releases it - the click-test screen did exactly this once with the right
+        // button - would otherwise leave the desktop holding that button for anything that
+        // came afterwards: every subsequent mouse move a right-button drag, and any menu
+        // the phone meant to open never coming, because Windows opens a context menu on
+        // the button *release*.
+        if (!input.Kind.Equals("mousebutton", StringComparison.OrdinalIgnoreCase) &&
+            !input.Kind.Equals("pointerbutton", StringComparison.OrdinalIgnoreCase))
+            return;
 
-            if (_heldKeys.Count > 16)
-                _log.Warning("More than 16 keys are held down; the input state is probably wrong");
+        var button = (input.Button ?? "left").ToLowerInvariant();
+
+        if (input.Down != true)
+        {
+            _heldButtons.Remove(button);
+            return;
+        }
+
+        if (!_heldButtons.Contains(button))
+        {
+            _heldButtons.Add(button);
+
+            if (_heldButtons.Count > 4)
+                _log.Warning("More than 4 mouse buttons are held down; the input state is probably wrong");
         }
     }
 
     private void ReleaseHeldKeys()
     {
-        if (_heldKeys.Count == 0)
+        if (_heldKeys.Count == 0 && _heldButtons.Count == 0)
             return;
 
         var held = _heldKeys.ToArray();
         _heldKeys.Clear();
+        var heldButtons = _heldButtons.ToArray();
+        _heldButtons.Clear();
 
-        _log.Information("Releasing {Count} key(s) that were still held: {Keys}",
-            held.Length, string.Join(", ", held));
+        if (held.Length > 0)
+            _log.Information("Releasing {Count} key(s) that were still held: {Keys}",
+                held.Length, string.Join(", ", held));
+
+        if (heldButtons.Length > 0)
+            _log.Information("Releasing {Count} mouse button(s) that were still held: {Buttons}",
+                heldButtons.Length, string.Join(", ", heldButtons));
 
         foreach (var code in held)
         {
@@ -452,6 +488,23 @@ internal sealed class InputPump
             catch (Exception ex)
             {
                 _log.Debug(ex, "Releasing {Code} failed", code);
+            }
+        }
+
+        foreach (var button in heldButtons)
+        {
+            try
+            {
+                _injector.Inject(new Esi.Protocol.RemoteInputRequest
+                {
+                    Kind = "mousebutton",
+                    Button = button,
+                    Down = false,
+                }, _screenWidth, _screenHeight);
+            }
+            catch (Exception ex)
+            {
+                _log.Debug(ex, "Releasing mouse button {Button} failed", button);
             }
         }
     }

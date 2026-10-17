@@ -129,10 +129,34 @@ class StatusSpine extends ConsumerWidget {
                 decoration: BoxDecoration(color: colour, borderRadius: EsiRadius.chip),
               ),
               const SizedBox(width: EsiSpace.md),
-              Text(
-                agentLabel(handshake, machine?.displayName),
-                style: EsiType.bodyStrong.copyWith(fontSize: 13),
-                overflow: TextOverflow.ellipsis,
+              // The machine name is the only navigation into pairing from inside the app:
+              // a paired phone never sees the "no PC paired yet" guards again, and this
+              // spine is the one bar that every screen carries. Tapping it goes to the
+              // PC-finding screen, where the list of paired machines and a Forget button
+              // sit next to Discovery. A chevron says the row is actionable without
+              // turning the readout into a button.
+              Flexible(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => context.go('/onboarding'),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Flexible(
+                        child: Text(
+                          agentLabel(handshake, machine?.displayName),
+                          style: EsiType.bodyStrong.copyWith(fontSize: 13),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const Icon(
+                        Icons.swap_horiz,
+                        size: 14,
+                        color: EsiPalette.faint,
+                      ),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(width: EsiSpace.sm),
               if (handshake != null)

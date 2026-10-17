@@ -164,6 +164,62 @@ public static class TaskCommands
         return ExitSuccess;
     }
 
+    // -----------------------------------------------------------------------------
+    // Surface for ServiceManager
+    // -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Registers the logon task for the session helper and starts it now - the registration
+    /// used by both <c>esirc task register</c> and <c>esirc install</c>. They are one
+    /// registration because the helper's start mechanism is one thing: the installer calls
+    /// this executable verbatim, and now the CLI install does the same thing it does.
+    /// <para>
+    /// The return follows the command's convention: 0 on any path that still manages to
+    /// satisfy the request, non-zero when it could not be done at all.
+    /// </para>
+    /// </summary>
+    public static int RegisterSessionAgentTask() => RegisterCore();
+
+    /// <summary>
+    /// Stops a running helper that the logon task started, for an uninstall that is about
+    /// to delete the task. A definition deleted under a running task leaves that running
+    /// instance alive - so <c>schtasks /end</c> comes first, exactly the order the Inno
+    /// Setup installer's <c>[UninstallRun]</c> has always used.
+    /// <para>
+    /// Quiet by design: a task that is not registered has nothing to stop, and a task that
+    /// is registered but not running is the normal case on a machine where nobody matched
+    /// the trigger (schtasks answers non-zero and the same text as for "no such task" for
+    /// both, so nothing is printed for either). Only a stop that worked prints, so the
+    /// uninstall output says what actually happened rather than reciting a fixed script.
+    /// </para>
+    /// </summary>
+    internal static void StopSessionTask()
+    {
+        if (!IsRegistered()) return;
+
+        var ended = RunSchtasks("/end", "/tn", SessionAgentTaskName);
+        if (ended.ExitCode != 0) return;
+
+        Console.WriteLine("  stopped the running session agent");
+    }
+
+    /// <summary>
+    /// Deletes the logon task, for an uninstall. Nothing is printed for a task that was
+    /// never registered - the previous uninstall state is not the story of this one.
+    /// </summary>
+    internal static void RemoveSessionTask()
+    {
+        if (!IsRegistered()) return;
+
+        var deleted = RunSchtasks("/delete", "/f", "/tn", SessionAgentTaskName);
+        if (deleted.ExitCode == 0)
+            Console.WriteLine($"  removed the '{SessionAgentTaskName}' logon task");
+        else
+            Console.WriteLine(
+                $"  warning: could not delete the '{SessionAgentTaskName}' logon task " +
+                $"({deleted.Combined.Trim()})");
+    }
+
     /// <summary>
     /// The session helper, found beside this executable.
     /// <para>

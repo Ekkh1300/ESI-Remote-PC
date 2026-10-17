@@ -163,11 +163,18 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
                       const SizedBox(width: EsiSpace.sm),
                       Expanded(
                         child: FilledButton.icon(
-                          onPressed: live
-                              ? () => ref
-                                  .read(remoteInputActionsProvider)
-                                  .button('right', true, 0.5, 0.5)
-                              : null,
+                          // D79: this used to send one event - `right button down` - and no
+                          // release. SendInput delivered it fine, which is the problem: the
+                          // desktop stayed holding the right button with nothing on the phone
+                          // able to let it go, so the next drag was a right-button drag and
+                          // no context menu ever opened (Windows opens menus on the *up*).
+                          // The InputPump only remembered held *keys*, so its safety net
+                          // released those and not this. Now: move the cursor to the middle
+                          // of the capture first, so the click visibly lands somewhere, then
+                          // a complete left click. A right click was meant to be the visible
+                          // proof a menu opening gives; an opening context menu over
+                          // whatever the user was doing is also the bug they reported.
+                          onPressed: live ? _testClick : null,
                           icon: const Icon(Icons.ads_click, size: 17),
                           label: const Text('Test click'),
                         ),
@@ -213,6 +220,16 @@ class _RemoteScreenState extends ConsumerState<RemoteScreen> {
   /// is re-read as well - which is what makes the dashboard catch up too, not just the socket.
   void _reconnect() {
     ref.read(connectionProvider.notifier).refresh();
+  }
+
+  /// The click test, as a complete event: where the cursor should be, then the press, then
+  /// the release. All three go through the same queue in order, and the release is what the
+  /// desktop was missing before - it is why the remote mouse felt "stuck" after this button.
+  void _testClick() {
+    final actions = ref.read(remoteInputActionsProvider);
+    actions.move(0.5, 0.5);
+    actions.button('left', true, 0.5, 0.5);
+    actions.button('left', false, 0.5, 0.5);
   }
 
   /// Hands the whole phone to the remote desktop.
@@ -1176,6 +1193,13 @@ class _KeyboardPanel extends StatelessWidget {
               onSubmitted: (value) {
                 if (value.isNotEmpty) onSend(value);
               },
+            ),
+            const SizedBox(height: EsiSpace.sm),
+            Text(
+              'The characters land in whatever has the keyboard focus on the PC. '
+              'If nothing at all appeared there, nothing there held focus when the text '
+              'arrived - click into a document or a field on the PC first, then send again.',
+              style: EsiType.body.copyWith(color: EsiPalette.faint, fontSize: 11),
             ),
           ],
         ),

@@ -33,6 +33,17 @@ class SettingsScreen extends ConsumerWidget {
               title: 'Settings',
               subtitle: machine.displayName,
               onRefresh: () => ref.read(settingsProvider.notifier).refresh(),
+              // The one place a paired phone can get back to the PC-finding screen.
+              // The spine's name row goes there too; this is the version with words on
+              // it, for the reader who is looking to move machines rather than to check
+              // on the current one.
+              actions: <Widget>[
+                OutlinedButton.icon(
+                  onPressed: () => context.go('/onboarding'),
+                  icon: const Icon(Icons.swap_horiz, size: 16),
+                  label: const Text('Find / switch PC'),
+                ),
+              ],
               children: <Widget>[
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: EsiSpace.lg),
