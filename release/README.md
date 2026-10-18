@@ -14,25 +14,23 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  4C8BDA32FAE80783F47A754654322917AFE2D0CE0629CAB35CEF07660050712A
-ESI-RemotePC-1.0.1.apk             83C5ED834F76EF0FF73D3A4E302EA68859C33814750522C84451337BDA9AFF44
+ESI-RemotePC-Setup-1.0.1-x64.exe  E5C21C78CFF0D0D4234C465247636E104A6579209C5C3E48D44A5765CB48C60F
+ESI-RemotePC-1.0.1.apk             3A8101E8881D4CB6C7C6F488BE65649B32DB3BE64E7AFF45824F17537B1AB860
 ```
 
 Both hashes change whenever their side of the project changes. If you downloaded an earlier copy of
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 10. **The APK changed** because the speaker grew its
-switch: the D87 answer rides `audio.start` as a top-level field, the preference lives in the
-phone's protected storage, and flipping it mid-stream closes and re-opens the capture. **The
-installer changed** because the session agent now engages the silencer before the capture
-opens, reads the flag from the pipeline envelope, and recovers a dead run's leftover mute at
-every startup.
+Both files have moved since prerelease 11. **The APK changed** because the QR scanner's silent
+branches grew voices (D88) and a gaming subscription no longer overwrites its state with a
+zero-filled reading (D89). **The installer changed** only because the two suite numbers ride
+the same compiled shape - no PC-side code changed in this step.
 Rebuilding either file reproduces these hashes.
 
 ## What this build fixes
 
-Twenty-six, each measured rather than suspected.
+Twenty-eight, each measured rather than suspected.
 
 **The room kept its second mouth open.** The phone plays the PC's sound ("confirmed on a real
 device, finally") — and the PC's own speakers kept playing the same thing beside it. The
@@ -42,6 +40,19 @@ capture. The mechanism was measured first on the machine that asked — a 440 Hz
 at peaks 5 143 muted / 5 144 unmuted — so the endpoint mute silences the room without touching
 the stream, and a registry ledger plus a startup recovery weigh the one edge where a run dies
 between the two. *(D87)*
+
+**The scanner said nothing no matter what it saw.** A QR that decoded but did not parse, a
+decode that produced no text, a camera that never opened — all one screen from the user's
+side, "nothing happens", none of it saying which. Every branch of the camera screen speaks
+now (a non-pairing code says it is one and is counted; an unreadable decode says so; twenty
+seconds of true silence has its own line; and a camera fault gets the app's own words plus
+Try again), the decision is a pinned pure function, and the pairing panel's copy no longer
+sends people hunting for the one-time secret a QR stopped carrying at D39. *(D88)*
+
+**And one gaming read died the instant it was subscribed.** The PC's watch receipt rides the
+`gaming` frame type with no data attached, and the phone read that receipt as a zero-everything
+state right over the real numbers. An ack is not a stateany more: the tap drops it, and the
+state-bearing frames still land. *(D89)*
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74

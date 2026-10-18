@@ -125,9 +125,31 @@ class QrParseResult {
   bool get isSuccess => payload != null;
 }
 
+/// What is decided off one camera decode (D88). The scanner used to make this call
+/// silently, which is why a code that decoded but did not parse — or did not decode at
+/// all — left the camera open with nothing said anywhere.
+enum PairingScanDecision {
+  /// A pairing payload the form can take.
+  accept,
+
+  /// Something decoded, and it is not a pairing code.
+  reject,
+
+  /// Nothing decodeable came out of the capture.
+  unreadable,
+}
+
 /// Reads the pairing QR, tolerantly.
 class PairingQr {
   const PairingQr._();
+
+  /// Decides what one decoded barcode is. Pure: it is what the scanner's meter reads,
+  /// and it is pinned so every branch of the camera screen says something.
+  static PairingScanDecision read(String? rawValue) {
+    if (rawValue == null) return PairingScanDecision.unreadable;
+    if (parse(rawValue).isSuccess) return PairingScanDecision.accept;
+    return PairingScanDecision.reject;
+  }
 
   static const List<String> _hostKeys = <String>[
     'host',

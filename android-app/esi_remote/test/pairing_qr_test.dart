@@ -73,4 +73,23 @@ void main() {
       expect(result.error, contains('no address, certificate pin or pairing secret'));
     });
   });
+  group('D88: the scanner decides, and says so', () {
+    // The scanner used to branch silently. What a decode IS is now a pinned, pure
+    // decision, and these are the three branches every camera screen edge has to speak.
+    test('a pairing URL accepts', () {
+      final connectUrl = 'esiremotepc://pair?host=192.168.1.100&port=48220'
+          '&deviceId=abc123&pin=sltOUhWs7LMerbKEiySmyXhjL4zetPpSzCD9RTRLpP8=';
+      expect(PairingQr.read(connectUrl), PairingScanDecision.accept);
+    });
+
+    test('any other content rejects loudly rather than silently', () {
+      expect(PairingQr.read('https://example.com/shop/item/42'),
+          PairingScanDecision.reject);
+      expect(PairingQr.read(''), PairingScanDecision.reject);
+    });
+
+    test('a decode with nothing in it is unreadable, and that is its own branch', () {
+      expect(PairingQr.read(null), PairingScanDecision.unreadable);
+    });
+  });
 }

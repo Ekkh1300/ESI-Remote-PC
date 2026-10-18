@@ -34,6 +34,24 @@ forgetting the PC this phone is on clears the active device too, because a phone
 PC it no longer remembers must not keep pretending to be pointed at one. The PC side of the
 pair is untouched; a pairing only dies when its other end is told to forget it as well. *(D84)*
 
+**And the QR scanner said nothing no matter what it saw.** Every decision the camera screen
+made was a silent `continue`: a code that decoded but did not parse left the camera open with
+no message anywhere, a decode that produced no text said the same thing nothing says, and a
+camera that could not open (a permission refusal, another app holding the device) drew a black
+box one line of package-default white text with no next step. All of that is one screen from
+the user's side — "nothing happens" — and none of it said which. All branches speak now: a
+code that is not a pairing code reads *That code decoded fine, but it is not a pairing code*
+(and it is counted, so a second refusal is a new sentence, not the old one unconfirmed); a
+decode that comes out empty says so and asks for closer, better light; twenty seconds of true
+silence — nothing read at all — has its own line; and the camera fault screen is the app's own
+words with a permission refusals' one real instruction (grant it in the settings, then Try
+again, which rebuilds the controller because a transient camera fault often clears on a fresh
+open). The deciding call itself is a pinned pure function now — three branches, a test each —
+so a future editor cannot re-argue one of them into silence. And the pairing panel's copy no
+longer promises what D39 removed: the QR has carried no one-time secret since the phone
+started inventing its own, and the old text pointing you at that secret on the prompt's QR was
+sending people hunting for a thing that is not there. *(D88)*
+
 ## The screen
 
 **The screen stream was completely black, and reported that it had worked.** Two separate
@@ -382,6 +400,16 @@ counter object exists, in any locale — and the extractor finds the `luid_` mar
 stands, so both spellings, and the adapter-memory rows that the memory pairing keys by, land on
 one adapter key. Measured after the fix on the same machine: two adapters aggregate, the
 primary reading 14.79 % while a window moved. *(D85)*
+
+**And one live read died the instant it was subscribed.** The PC's hub answers a
+`gaming.watch` request with a `gaming` frame whose data field is **null** — a receipt for the
+request, not a reading. The phone's typed tap on that stream read everything of that type as
+state, handed `null` to the parser as an empty map, and the parser turns every missing number
+into a zero: every time the gaming screen opened its subscription, a false **GPU 0 %** /
+CPU 0 % / ping 0 ms landed on whatever real numbers were already there, and a real gaming
+frame arriving later overwrote it while nothing pushed the true state down meanwhile. The tap
+now drops a data-less `gaming` frame as what it is — an ack, not a state — and the pin holds
+both halves: a null receipt lands as nothing, and a state-bearing frame still lands. *(D89)*
 
 ## Navigation
 

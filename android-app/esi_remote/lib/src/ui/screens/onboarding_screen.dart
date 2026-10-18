@@ -730,10 +730,11 @@ class _QrPanelState extends ConsumerState<_QrPanel> {
         children: <Widget>[
           Text(
             'Pairing starts on this phone: press Pair and a six-digit code appears on the '
-            'PC, where someone has to approve it. Nothing else will do it. The QR on that '
-            'prompt carries the PC address, the certificate pin and a one-time secret - '
-            'these buttons read the address and pin into the form; the secret is collected '
-            'on the next screen, while the code is waiting.\n\n'
+            'PC, where someone has to approve it. Nothing else will do it. The QR on the '
+            'PC\'s pairing page carries only the PC address and its certificate pin - '
+            'nothing secret - and the Scan button reads it into this form. The one-time '
+            'secret is born on this phone and is only ever shown while the PC\'s prompt is '
+            'waiting for a person to approve; the QR never carries it.\n\n'
             'If nobody is signed in, there is no trusted display for the code, so it cannot '
             'be approved in a browser. Stop the agent, run "esirc pair approve <code>" in a '
             'console on the PC, and start the agent again.\n\n'
@@ -802,16 +803,56 @@ class QrScannerScreen extends ConsumerStatefulWidget {
 }
 
 class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
-  late final MobileScannerController _controller = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
-    formats: const <BarcodeFormat>[BarcodeFormat.qrCode],
-  );
+  MobileScannerController? _camera;
+
+  MobileScannerController get _controller =>
+      _camera ??= MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        formats: const <BarcodeFormat>[BarcodeFormat.qrCode],
+      );
+
   bool _handled = false;
+
+  // What the camera has heard (D88). The screen used to be silent on purpose about a
+  // decode that did not parse, and that silence is what "the scan did nothing" was made
+  // of: the camera sat open, the phone said nothing, and nothing anywhere said which of
+  // the two lawful silences this was - a code not yet read, or a code read and refused.
+  // Every branch speaks now, and each one is a counted event, not a one-shot banner,
+  // because a streaky code fails three times before it fails visibly.
+  int _rejected = 0;
+  int _unreadable = 0;
+  bool _hasHeardAnything = false;
+  bool _quietLongEnough = false;
+  Timer? _quietTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Twenty seconds of pure silence is its own thing to say: nothing has been read at
+    // all. It fires only while the camera is faultless; a fault screen owns the screen
+    // from there on and needs no timer running under it.
+    _quietTimer = Timer(const Duration(seconds: 20), () {
+      if (mounted) setState(() => _quietLongEnough = true);
+    });
+  }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _quietTimer?.cancel();
+    _camera?.dispose();
     super.dispose();
+  }
+
+  void _restartCamera() {
+    // The controller is what got us here - permission state, focus, the camera itself -
+    // so a retry builds a whole new one, the way the screen would on a fresh open.
+    _quietTimer?.cancel();
+    _camera?.dispose();
+    _camera = null;
+    _quietTimer = Timer(const Duration(seconds: 20), () {
+      if (mounted) setState(() => _quietLongEnough = true);
+    });
+    setState(() {});
   }
 
   @override
@@ -820,7 +861,14 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
         body: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            MobileScanner(controller: _controller, onDetect: _onDetect),
+            MobileScanner(
+              controller: _controller,
+              onDetect: _onDetect,
+              errorBuilder: (context, error) => _ScannerFault(
+                error: error,
+                onRetry: _restartCamera,
+              ),
+            ),
             const _ScannerFrame(),
             SafeArea(
               child: Column(
@@ -849,11 +897,11 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
                   const Spacer(),
                   Padding(
                     padding: const EdgeInsets.all(EsiSpace.lg),
-                    child: Text(
-                      'The code is on the pairing page in the PC\'s browser. A phone camera '
-                      'cannot read a screen that is asleep — wake it first.',
-                      textAlign: TextAlign.center,
-                      style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
+                    child: _ScannerBottomLine(
+                      rejected: _rejected,
+                      unreadable: _unreadable,
+                      hasHeardAnything: _hasHeardAnything,
+                      quietLongEnough: _quietLongEnough,
                     ),
                   ),
                 ],
@@ -866,14 +914,148 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
   void _onDetect(BarcodeCapture capture) {
     if (_handled) return;
     for (final barcode in capture.barcodes) {
-      final raw = barcode.rawValue;
-      if (raw == null) continue;
-      if (!PairingQr.parse(raw).isSuccess) continue;
-      _handled = true;
-      HapticFeedback.mediumImpact();
-      Navigator.of(context).pop(raw);
-      return;
+      switch (PairingQr.read(barcode.rawValue)) {
+        case PairingScanDecision.accept:
+          _handled = true;
+          _quietTimer?.cancel();
+          HapticFeedback.mediumImpact();
+          Navigator.of(context).pop(barcode.rawValue);
+          return;
+
+        case PairingScanDecision.reject:
+          setState(() {
+            _hasHeardAnything = true;
+            _quietLongEnough = false;
+            _rejected++;
+          });
+
+        case PairingScanDecision.unreadable:
+          setState(() {
+            _hasHeardAnything = true;
+            _quietLongEnough = false;
+            _unreadable++;
+          });
+      }
     }
+  }
+}
+
+/// The line under the frame: what the camera has heard about the code, or the standing
+/// advice when it has heard nothing at all (D88).
+///
+/// All states are mutual: a fault screen replaces this line's platform half because the
+/// camera itself is what has failed, and a fresh rejection reads over the quiet hint -
+/// but only for a moment, because the quiet hint is about this code shot, not about the
+/// last refused one.
+class _ScannerBottomLine extends StatelessWidget {
+  const _ScannerBottomLine({
+    required this.rejected,
+    required this.unreadable,
+    required this.hasHeardAnything,
+    required this.quietLongEnough,
+  });
+
+  final int rejected;
+  final int unreadable;
+  final bool hasHeardAnything;
+  final bool quietLongEnough;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5);
+
+    // Non-pairing codes first: they are the loud facts. Counted, so a second refusal is a
+    // new sentence rather than the old one unconfirmed.
+    if (rejected > 0) {
+      return Text(
+        rejected == 1
+            ? 'That code decoded fine, but it is not a pairing code. Point at the QR on '
+                'the PC\'s pairing page.'
+            : 'That code decoded fine, but it is not a pairing code ($rejected read '
+                'this way). Point at the QR on the PC\'s pairing page.',
+        textAlign: TextAlign.center,
+        style: style.copyWith(color: EsiPalette.flare),
+      );
+    }
+
+    // Then unreadable decodes - the camera saw a bar, the digits came out empty.
+    if (unreadable > 0) {
+      return Text(
+        'A code was seen but nothing readable came out of it'
+        '${unreadable > 1 ? ' ($unreadable times)' : ''}. Bring the phone closer and '
+        'keep the code well lit.',
+        textAlign: TextAlign.center,
+        style: style.copyWith(color: EsiPalette.flare),
+      );
+    }
+
+    // Then the standing advice - unchanged from before, because when all that has happened
+    // is nothing, the old words are still the right ones.
+    return Text(
+      'The code is on the pairing page in the PC\'s browser. A phone camera cannot read a '
+      'screen that is asleep — wake it first.'
+      '${quietLongEnough ? "\n\nNothing has been read yet — bring the phone closer." : ""}',
+      textAlign: TextAlign.center,
+      style: style,
+    );
+  }
+}
+
+/// The camera fault, in the app's own words (D88).
+///
+/// mobile_scanner's built-in fault panel is a black box one line of white text, which a
+/// user describes as "nothing happens": it has no next step and no words of ours. This one
+/// names the fault, tells the user the one real action available for a permission refusal
+/// (grant it in the system settings), and gives a retry that rebuilds the controller -
+/// because a transient camera fault, the kind a second camera app leaves the device in,
+/// often clears on a fresh open and nothing else.
+class _ScannerFault extends StatelessWidget {
+  const _ScannerFault({required this.error, required this.onRetry});
+
+  final MobileScannerException error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final permissionFault =
+        error.errorCode == MobileScannerErrorCode.permissionDenied;
+
+    return ColoredBox(
+      color: EsiPalette.void_,
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(EsiSpace.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(Icons.camera_alt_outlined, size: 34, color: EsiPalette.dim),
+                const SizedBox(height: EsiSpace.md),
+                Text(
+                  permissionFault ? 'The camera was not allowed' : 'The camera could not open',
+                  style: EsiType.subtitle,
+                ),
+                const SizedBox(height: EsiSpace.sm),
+                Text(
+                  permissionFault
+                      ? 'The app needs the camera to read the QR. Grant it for this app in '
+                          'the phone\'s system settings, then tap Try again here.'
+                      : 'The camera on this phone refused to start. Usually that is '
+                          'another app holding it. Close that app, then tap Try again.',
+                  style: EsiType.body.copyWith(color: EsiPalette.dim, fontSize: 12.5),
+                ),
+                const SizedBox(height: EsiSpace.lg),
+                OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

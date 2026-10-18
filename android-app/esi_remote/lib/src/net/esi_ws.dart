@@ -401,8 +401,16 @@ extension EsiWsStream on Stream<EsiWsFrame> {
         (f) => Handshake.fromJson(f.data ?? const <String, dynamic>{}),
       );
 
-  Stream<GamingState> get gamingStates => where((f) => f.type == 'gaming').map(
-        (f) => GamingState.fromJson(f.data ?? const <String, dynamic>{}),
+  /// Gaming state as the PC pushes it. A `gaming` frame that carries NO data is the
+  /// hub's receipt for a `gaming.watch` request (WebSocketHub sends it with `data: null`),
+  /// and it is dropped here rather than read, because reading `null` as state hands the
+  /// parser `{}` and the parser turns every missing number into a zero - a live GPU read
+  /// 0% on the gaming screen the moment the subscription was acked (D89). A real gaming
+  /// update today only ever arrives with data attached; if the hub one day streams
+  /// periodic frames, they carry `data` too.
+  Stream<GamingState> get gamingStates =>
+      where((f) => f.type == 'gaming' && f.data != null).map(
+        (f) => GamingState.fromJson(f.data!),
       );
 
   /// Whether the PC accepted the request to capture its own audio (§7.2).
