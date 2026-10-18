@@ -88,26 +88,34 @@ public sealed class WmiClient : IDisposable
         }
         catch (ManagementException ex)
         {
-            _log.LogDebug(ex, "WMI query failed ({Query} in {Scope}); returning fallback", wql, scope);
-            if (fallback is not null)
-                return [fallback()];
+            _log.LogDebug(ex, "WMI query failed ({Query} in {Scope}); returning nothing and not caching (D90)", wql, scope);
+            return fallback is not null ? [fallback()] : results;
         }
         catch (COMException ex)
         {
-            _log.LogDebug(ex, "WMI query failed with a COM error ({Query}); returning fallback", wql);
-            if (fallback is not null)
-                return [fallback()];
+            _log.LogDebug(ex, "WMI query failed with a COM error ({Query}); returning nothing and not caching (D90)", wql);
+            return fallback is not null ? [fallback()] : results;
         }
         catch (UnauthorizedAccessException ex)
         {
-            _log.LogDebug(ex, "WMI query denied ({Query}); returning fallback", wql);
-            if (fallback is not null)
-                return [fallback()];
+            _log.LogDebug(ex, "WMI query denied ({Query}); returning nothing and not caching (D90)", wql);
+            return fallback is not null ? [fallback()] : results;
         }
 
+        // Only a completed read is cached. Before D90 the failure paths fell through to
+        // this cache write too, so one swallowed WMI hiccup was served back, empty and
+        // untried, for the cache's whole TTL - on the GPU path that failure was not even
+        // a hiccup, it was permanent, and the phone read "Adapters reporting 0" forever.
         _cache[cacheKey] = (DateTimeOffset.UtcNow, results);
         return results;
     }
+
+    /// <summary>
+    /// Whether a completed read result currently sits under this scope|wql key. Internal:
+    /// the suite uses it to pin that failures are never cached and successes are (D90).
+    /// </summary>
+    internal bool IsCached(string scope, string wql) =>
+        _cache.ContainsKey(scope + "|" + wql);
 
     /// <summary>Runs a scalar WQL query, returning the first row's value or <c>null</c>.</summary>
     public T? QueryScalar<T>(string wql, string scope, Func<ManagementBaseObject, T?> selector) where T : class

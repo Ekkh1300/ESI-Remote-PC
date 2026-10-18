@@ -237,10 +237,23 @@ public sealed class SystemInfoProvider
     // GPU
     // -----------------------------------------------------------------------------
 
+    /// <summary>
+    /// The video-controller inventory query (D90). It used to be a bare property list with
+    /// no FROM clause — invalid WQL, swallowed into an empty list, which was then cached for
+    /// the cache's full TTL, so the phone read "Adapters reporting 0" for as long as the
+    /// service kept its poisoned cache warm. Every other WMI query in the codebase names
+    /// its class; this one does too now, and the suite pins both halves: the class is in
+    /// the text, and the machine's real inventory comes back through it.
+    /// </summary>
+    internal const string VideoControllerWql =
+        "SELECT Name, AdapterCompatibility, AdapterRAM, DriverVersion, VideoProcessor, " +
+        "CurrentHorizontalResolution, CurrentVerticalResolution, Status, PNPDeviceID " +
+        "FROM Win32_VideoController";
+
     public List<GpuInfo> GetGpuInfo()
     {
         var rows = _wmi.Query(
-            "SELECT Name, AdapterCompatibility, AdapterRAM, DriverVersion, VideoProcessor, CurrentHorizontalResolution, CurrentVerticalResolution, Status, PNPDeviceID",
+            VideoControllerWql,
             WmiClient.CimV2,
             o => new
             {

@@ -411,6 +411,19 @@ frame arriving later overwrote it while nothing pushed the true state down meanw
 now drops a data-less `gaming` frame as what it is — an ack, not a state — and the pin holds
 both halves: a null receipt lands as nothing, and a state-bearing frame still lands. *(D89)*
 
+**And the GPU card read "Adapters reporting 0" because the inventory query named no device
+class at all.** The card's rows come from the agent's video-controller inventory, which is
+one WMI query — and the only WMI query in the codebase written as a bare `SELECT` of ten
+columns with no `FROM` clause, invalid from its first writing. The metrics pipeline's
+never-fail design swallowed it into an empty list by design; the cache then held that empty
+failure under its key for the full TTL; and the debug-level log line was the whole of the
+evidence on disk. Zero adapters, forever, on a healthy machine with a working card, behind
+every prerelease before thirteen. Both halves are fixed and pinned: the query names its
+class — `FROM Win32_VideoController` — and a failed read is returned but never cached, so a
+WMI hiccup retries on the next read instead of being re-served as emptiness for five minutes.
+Measured after the fix, live: the inventory returns `AMD Radeon RX 6700 XT, vendor amd,
+primary` on the machine that reported the empty card. *(D90)*
+
 ## Navigation
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought

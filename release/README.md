@@ -14,7 +14,7 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  E5C21C78CFF0D0D4234C465247636E104A6579209C5C3E48D44A5765CB48C60F
+ESI-RemotePC-Setup-1.0.1-x64.exe  1546443301C8719E7B044A79B90BDB3F14F3C55CE80541B542EAD778630E4752
 ESI-RemotePC-1.0.1.apk             3A8101E8881D4CB6C7C6F488BE65649B32DB3BE64E7AFF45824F17537B1AB860
 ```
 
@@ -22,15 +22,27 @@ Both hashes change whenever their side of the project changes. If you downloaded
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 11. **The APK changed** because the QR scanner's silent
-branches grew voices (D88) and a gaming subscription no longer overwrites its state with a
-zero-filled reading (D89). **The installer changed** only because the two suite numbers ride
-the same compiled shape - no PC-side code changed in this step.
+Both files have moved since prerelease 12. **The installer changed** because the GPU inventory
+query was dead since its first writing — a SELECT list with no FROM clause, swallowed into an
+empty list, and the empty failure cached so the room read "Adapters reporting 0" forever
+(D90). **The APK did not move this time** — PC-side only, and its bytes are identical to
+prerelease 12's.
 Rebuilding either file reproduces these hashes.
 
 ## What this build fixes
 
-Twenty-eight, each measured rather than suspected.
+Twenty-nine, each measured rather than suspected.
+
+**The GPU inventory never asked which device it was counting.** The dashboard's Graphics card
+is filled from the video-controller inventory, and that inventory is one WMI query — the only
+one in the codebase written as a bare SELECT list with no FROM clause. Invalid WQL, swallowed
+without a sound into an empty list, which the cache then held for its whole TTL: "Adapters
+reporting 0" forever, on a machine with a working AMD card, through every prerelease before
+thirteen. The defective half is fixed by naming the class — `FROM Win32_VideoController` —
+and the systemic half by never caching a failed read, so the next attempt retries instead of
+re-serving the poison for five minutes. Measured after both halves: the inventory returns
+`AMD Radeon RX 6700 XT, vendor amd, primary` live on the machine that reported the empty card.
+*(D90)*
 
 **The room kept its second mouth open.** The phone plays the PC's sound ("confirmed on a real
 device, finally") — and the PC's own speakers kept playing the same thing beside it. The
