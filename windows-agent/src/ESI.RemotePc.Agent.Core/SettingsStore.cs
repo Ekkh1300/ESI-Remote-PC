@@ -11,7 +11,7 @@ public sealed class AgentOptions
     public const string SectionName = "Esi";
 
     /// <summary>Overlays the application version, which is not user-configurable.</summary>
-    public string Version { get; set; } = "1.0.1";
+    public string Version { get; set; } = "1.1.0";
 
     public string DataDirectory { get; set; } = DefaultDataDirectory();
 

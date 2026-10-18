@@ -1,4 +1,4 @@
-# ESI Remote PC 1.0.1
+﻿# ESI Remote PC 1.1.0
 
 Two files. That is the whole delivery.
 
@@ -8,64 +8,66 @@ What changed, and what it looked like before each fix, is in
 
 | File | Size | What it is |
 |---|---|---|
-| `ESI-RemotePC-Setup-1.0.1-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
-| `ESI-RemotePC-1.0.1.apk` | 66.8 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
+| `ESI-RemotePC-Setup-1.1.0-x64.exe` | 44.2 MB | The Windows installer. One self-contained executable; run it and it installs everything and starts the agent. |
+| `ESI-RemotePC-1.1.0.apk` | 66.9 MB | The Android app. Carries `arm64-v8a`, `armeabi-v7a` and `x86_64`; see D52 below before changing the ABI list. |
 
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  D507295E8BBD762F59355C771F80D71C18C43A48034724DB6A283245C9B350B9
-ESI-RemotePC-1.0.1.apk             3A8101E8881D4CB6C7C6F488BE65649B32DB3BE64E7AFF45824F17537B1AB860
+ESI-RemotePC-Setup-1.1.0-x64.exe  3266F6858C9970950B431367972BBEC5A758313BA4FCBAD553E8050D5D73FA3B
+ESI-RemotePC-1.1.0.apk             110BEE37E976343678F93A7F57E605CFAAA036D1A384BEA59A85131B9A004055
 ```
 
 Both hashes change whenever their side of the project changes. If you downloaded an earlier copy of
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 13. **The installer changed** because the per-adapter
-GPU memory read decoded its counter through the wrong union member and served zero bytes on
-a card mid-render (D91). **The APK did not move** — PC-side only; its bytes are identical to
-prereleases 12 and 13.
-Rebuilding either file reproduces these hashes.
+**Version 1.1.0** is the first release outside the 1.0.1 cycle. The 1.0.1-series prereleases
+(audio.1 through audio.14) built it: `audio.13` fixed the GPU inventory's FROM-less query and
+the poisoned cache (`D90`), `audio.14` fixed the adapter-memory counters' union decode
+(`D91`), `audio.11` shipped the phone-as-speaker silencing toggle (`D87`), and `audio.12`
+gave the QR scanner a voice and stopped a gaming subscription from reading an empty receipt
+as a zero-filled state (`D88`, `D89`). The release it replaces, `v1.0.1`, keeps its tag and
+its assets on GitHub; this folder now only carries the current pair.
 
 ## What this build fixes
 
 Thirty, each measured rather than suspected.
 
 **The adapter memory read zero while the desktop rendered.** The Graphics card's per-adapter
-"Memory" line comes from the `GPU Adapter Memory(*)` counters — read as 64-bit byte counts
+"Memory" line comes from the `GPU Adapter Memory(*)` counters â€” read as 64-bit byte counts
 (LARGE format) but decoded through the union's *double* member, so 845,787,136
 bytes arrived as a subnormal that passed the "greater than zero" gate and (long)-cast to
 exactly 0. typeperf on the same machine measured 845,787,136 bytes a second apart from our
-0. The decode now picks the union member the format asked for — pinned three ways
+0. The decode now picks the union member the format asked for â€” pinned three ways
 (that 845,787,136 decodes as 845,787,136 bytes; that the old re-read provably casts to 0 for
-any realistic VRAM; that double-format paths still decode as doubles) — and a live pin holds
+any realistic VRAM; that double-format paths still decode as doubles) â€” and a live pin holds
 the desktop's real VRAM figure through the served path. Measured after the fix, live:
 the served row carries `memoryUsedBytes = 1,182,089,216` (~1.10 GB) on the card mid-render,
 where it read 0 before. *(D91)*
 
 **The GPU inventory never asked which device it was counting.** The dashboard's Graphics card
-is filled from the video-controller inventory, and that inventory is one WMI query — the only
+is filled from the video-controller inventory, and that inventory is one WMI query â€” the only
 one in the codebase written as a bare SELECT list with no FROM clause. Invalid WQL, swallowed
 without a sound into an empty list, which the cache then held for its whole TTL: "Adapters
 reporting 0" forever, on a machine with a working AMD card, through every prerelease before
-thirteen. The defective half is fixed by naming the class — `FROM Win32_VideoController` —
+thirteen. The defective half is fixed by naming the class â€” `FROM Win32_VideoController` â€”
 and the systemic half by never caching a failed read, so the next attempt retries instead of
 re-serving the poison for five minutes. Measured after both halves: the inventory returns
 `AMD Radeon RX 6700 XT, vendor amd, primary` live on the machine that reported the empty card.
 *(D90)*
 
 **The room kept its second mouth open.** The phone plays the PC's sound ("confirmed on a real
-device, finally") — and the PC's own speakers kept playing the same thing beside it. The
+device, finally") â€” and the PC's own speakers kept playing the same thing beside it. The
 speaker panel now carries **"Silence the PC's own speakers"**, on by default: while the stream
 runs, the PC mutes its default output endpoint and unmutes on every path that closes the
-capture. The mechanism was measured first on the machine that asked — a 440 Hz tone tapped
-at peaks 5 143 muted / 5 144 unmuted — so the endpoint mute silences the room without touching
+capture. The mechanism was measured first on the machine that asked â€” a 440 Hz tone tapped
+at peaks 5 143 muted / 5 144 unmuted â€” so the endpoint mute silences the room without touching
 the stream, and a registry ledger plus a startup recovery weigh the one edge where a run dies
 between the two. *(D87)*
 
 **The scanner said nothing no matter what it saw.** A QR that decoded but did not parse, a
-decode that produced no text, a camera that never opened — all one screen from the user's
+decode that produced no text, a camera that never opened â€” all one screen from the user's
 side, "nothing happens", none of it saying which. Every branch of the camera screen speaks
 now (a non-pairing code says it is one and is counted; an unreadable decode says so; twenty
 seconds of true silence has its own line; and a camera fault gets the app's own words plus
@@ -363,7 +365,7 @@ capture queue is: audio from half a second ago is worse than a gap.
 
 ## Windows
 
-1. Run `ESI-RemotePC-Setup-1.0.1-x64.exe`. It asks for administrator rights through UAC.
+1. Run `ESI-RemotePC-Setup-1.1.0-x64.exe`. It asks for administrator rights through UAC.
 2. Accept the firewall rule, or add it yourself.
 3. Open `https://localhost:48220/pairing` on the PC.
 4. Pair a phone, then point the app at the PC.
@@ -378,7 +380,7 @@ install cannot look like a working one.
 
 **Why the install directory is a folder and not three tidy binaries.** Three processes have
 to run, and one of them cannot be a service. A Windows service runs in session 0 with no
-interactive desktop, so it cannot inject input, capture the screen, or lock the workstation —
+interactive desktop, so it cannot inject input, capture the screen, or lock the workstation â€”
 those need a process inside the signed-in user's session. The third entry point is the
 command-line tool (`esirc install`, `esirc status`, `esirc pair approve`).
 
@@ -390,7 +392,7 @@ the directory once, where the installer compresses it. 129.7 MB became 43.8 MB. 
 that the three entry-point executables are now 160 KB launchers that need the DLLs beside
 them, so the directory has to be moved and deleted as a unit.
 
-**To uninstall.** Start menu → *Uninstall ESI Remote PC*. That also deletes the pairing
+**To uninstall.** Start menu â†’ *Uninstall ESI Remote PC*. That also deletes the pairing
 database, the TLS identity and the logs; there is no "keep my data" option, and leaving a
 usable identity behind on a machine that no longer has the software is the kind of thing that
 gets missed in an audit.
@@ -399,7 +401,7 @@ gets missed in an audit.
 
 ## Android
 
-1. Copy `ESI-RemotePC-1.0.1.apk` to the phone and open it, or install with `adb install`.
+1. Copy `ESI-RemotePC-1.1.0.apk` to the phone and open it, or install with `adb install`.
 2. The app broadcasts on the LAN and finds the PC by itself. If it does not, enter the
    address by hand. The certificate pin comes from the PC's pairing page; it is never filled
    in from discovery, because a value from the wire is not evidence.
@@ -409,22 +411,22 @@ gets missed in an audit.
    the one-time secret, and the phone cannot collect the credentials without it.
 
 Step 5 is not an extra step. The secret cannot exist before step 3, because the PC mints it
-while handling the request that step 3 makes — which is the whole reason the QR exists.
+while handling the request that step 3 makes â€” which is the whole reason the QR exists.
 
-**Signed, and how to install it.** The APK is a Flutter release build — AOT compiled,
-tree-shaken, minified — signed with a 4096-bit RSA key held for this delivery, certificate
+**Signed, and how to install it.** The APK is a Flutter release build â€” AOT compiled,
+tree-shaken, minified â€” signed with a 4096-bit RSA key held for this delivery, certificate
 `CN=ESI Remote PC, OU=Release, O=ESI Remote PC, C=US`, SHA-256
 `de2e20eb3795c5d25baaf191d8c4f44a886c7268f399e9f16592acb75b156f68`. **Earlier builds of this
-app were signed with the Android debug key and are not installable over this one** — see the
+app were signed with the Android debug key and are not installable over this one** â€” see the
 troubleshooting below, because the error message does not say that.
 
 Because it is not from the Play Store, Android asks you to allow installation from that source.
-With a file manager: open the APK, and if it refuses, go to **Settings → Apps → Special app
-access → Install unknown apps → pick your file manager or browser → Allow**. Then open the APK
+With a file manager: open the APK, and if it refuses, go to **Settings â†’ Apps â†’ Special app
+access â†’ Install unknown apps â†’ pick your file manager or browser â†’ Allow**. Then open the APK
 again. Over ADB it needs no such permission:
 
 ```
-adb install ESI-RemotePC-1.0.1.apk
+adb install ESI-RemotePC-1.1.0.apk
 ```
 
 It carries `arm64-v8a`, `armeabi-v7a` and `x86_64`, and needs Android 7.0 (API 24) or newer.
@@ -461,7 +463,7 @@ the install failure this file records as fixed.
 | What you see | What it means | What to do |
 |---|---|---|
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, or *App not installed* when an older copy is already on the phone | An earlier build signed with the **debug** key is installed. Android refuses to replace an app with one signed by a different key, and the message never mentions signatures. | Uninstall the old one first, then install this. You will have to pair again: the master secret lives in app-private storage that an uninstall removes |
-| *For your security, your phone is not allowed to install unknown apps from this source* | The per-source install permission has not been granted | **Settings → Apps → Special app access → Install unknown apps**, as above |
+| *For your security, your phone is not allowed to install unknown apps from this source* | The per-source install permission has not been granted | **Settings â†’ Apps â†’ Special app access â†’ Install unknown apps**, as above |
 
 Both were reproduced here: installing the release-signed APK over the debug-signed one fails
 with `Existing package signatures do not match`, and the same APK installs and launches on a
@@ -470,7 +472,7 @@ clean device.
 **Why the QR matters.** Pairing starts with an unauthenticated request the phone makes to
 the PC. If the PC sent the resulting secret back over the network, anyone on the LAN could
 trigger a prompt, wait for a user to approve it in good faith, and collect the credentials.
-The QR is how that secret moves — from the screen to the camera, which is the only channel an
+The QR is how that secret moves â€” from the screen to the camera, which is the only channel an
 attacker is not on. There is deliberately no way to approve from a browser: the pairing page
 is reachable by anything on the LAN and the code is six digits, so a page that could approve
 would let an attacker finish a pairing they started themselves.
@@ -482,31 +484,31 @@ would let an attacker finish a pairing they started themselves.
 Worth reading before you trust this on a real machine.
 
 **Verified by running it.** The Windows build is green end to end: 453 unit and integration
-tests, 19 live probes against a booted agent, and a real install → serve → uninstall cycle
+tests, 19 live probes against a booted agent, and a real install â†’ serve â†’ uninstall cycle
 that was repeated from the delivered installer file. The Android side is 310 Dart tests, and
-— the part that matters — a live check that starts a throwaway agent and drives the app's
+â€” the part that matters â€” a live check that starts a throwaway agent and drives the app's
 own networking, TLS pinning, signing and AES-GCM code against it. Eleven assertions, all
 passing:
 
 | | |
 |---|---|
 | A pinned TLS handshake completes, **and a wrong pin is refused** | the second half is the one that matters |
-| The handshake's advertised pin equals the fingerprint of the certificate actually served | PROTOCOL.md §A2.1 and the agent agree |
+| The handshake's advertised pin equals the fingerprint of the certificate actually served | PROTOCOL.md Â§A2.1 and the agent agree |
 | `esirc pair approve` works, from the real CLI | not a stub |
 | An approved attempt releases a wrapped envelope | |
 | **Dart opens an envelope C# produced** | AES-GCM, HKDF and the key generation, across a real key |
 | **A request signed by Dart is accepted by the agent** | and a replayed nonce is refused with `esi_replay` |
 
 **The installer is now tested by running it.** `installer/install-cycle-test.ps1` drives the
-real thing through five states — clean, install, **install again over its own output**,
-uninstall, install again — and asserts 29 things, all passing. It asks the question a user
+real thing through five states â€” clean, install, **install again over its own output**,
+uninstall, install again â€” and asserts 29 things, all passing. It asks the question a user
 would ask ("is it working?") by connecting to the agent's port, not by reading the SCM's
 opinion, because a service can be registered and permanently stopped and that is
 indistinguishable from a working install if all you check is registration.
 
 Three of those 29 are the `requiredPrivileges` check, and they are worth reading twice. The
 old one was `$value -like '*SeTcbPrivilege*'`, which is a boolean for a string and an *array*
-for a `string[]` — so it passed while the value was the broken REG_SZ that stopped the agent
+for a `string[]` â€” so it passed while the value was the broken REG_SZ that stopped the agent
 starting for months, and then **threw** the moment the value was corrected. A test that could
 tell neither version from the other. It now reads the value through the registry API, asserts
 that the kind is `REG_MULTI_SZ`, and asserts each privilege is its own element.
@@ -521,9 +523,9 @@ every one of them produced "installed, and nothing happens":
   that reported success, a service visible in `services.msc`, and an agent that never ran.
   The sequence now waits for the SCM at each step and checks every exit code.
 - **The logon task could never fire.** Two separate faults. An `ONLOGON` trigger fires when
-  somebody *signs in*, and installing while already signed in — the normal case — means it
+  somebody *signs in*, and installing while already signed in â€” the normal case â€” means it
   has already been and gone, so the installer now starts the task too. And
-  `schtasks /create /tr "C:\Program Files\…"` cannot be made to work at all: Task Scheduler
+  `schtasks /create /tr "C:\Program Files\â€¦"` cannot be made to work at all: Task Scheduler
   parses the action out of the raw command line instead of taking an argv element, so it
   stored the quoted path perfectly and then reported 0x80070002, "file not found", every time
   it tried to run it. The task is now registered from an XML document, where the command is
@@ -540,7 +542,7 @@ Three more, all found once the cycle was pointed at the right binary:
 
 - **The cycle could not be run from the entry point that ships it.**
   `install-cycle-test.ps1` joined even an absolute `-Setup` to its own directory, so
-  `build.ps1` handed it `E:\…\installer\E:\…\setup.exe` and every install step threw —
+  `build.ps1` handed it `E:\â€¦\installer\E:\â€¦\setup.exe` and every install step threw â€”
   while the steps that only assert the machine is clean reported ok. It now refuses to start
   without an installer rather than failing three steps in with green above it.
 - **It was testing a day-old installer.** The build checked only that the setup file
@@ -558,7 +560,7 @@ orphaned an open named-pipe server instance on each reconnect: the pump stopped 
 closing the pipe it had been reading, and the next attempt created a replacement over the
 top of it. The pipe name allows one server instance, so from the second reconnect onward
 `CreatePipeServer` failed with `All pipe instances are busy` and the session helper could
-never attach again — meaning remote input and screen capture would quietly stop working the
+never attach again â€” meaning remote input and screen capture would quietly stop working the
 first time somebody signed out and back in. The agent's log already contained that exact
 exception, which is the only reason it was findable. Five forced restarts of the helper on
 the old build produced 168 lines of the error and not one successful reconnect; on the
@@ -579,7 +581,7 @@ opened a connection, or read the stored state back.
 The APK was installed on an Android 16 emulator and pointed at a real agent on this machine.
 Discovery found the PC on its own (`10.0.2.2:48220`, subnet sweep and UDP broadcast; mDNS
 correctly reported no answer rather than pretending otherwise). Pairing then failed, and kept
-failing, for five unrelated reasons — any one of which would have been enough on its own:
+failing, for five unrelated reasons â€” any one of which would have been enough on its own:
 
 1. **Pairing could not be started.** The app navigated with `pushNamed('/pairing')`, and
    go_router resolves a name through `RouteMatchList.namedLocation`, which walks the match
@@ -589,10 +591,10 @@ failing, for five unrelated reasons — any one of which would have been enough 
    greyed out afterwards and the app looked merely busy rather than broken.
 2. **The pairing secret was demanded before it could exist.** The form required a pairing
    secret, but the PC mints that secret while handling the pairing request, and only ever
-   hands it out on a QR shown *afterwards* — on the approval prompt, or at
-   `/pairing?code=…`. The two requirements deadlocked, so pairing was impossible from the
+   hands it out on a QR shown *afterwards* â€” on the approval prompt, or at
+   `/pairing?code=â€¦`. The two requirements deadlocked, so pairing was impossible from the
    phone by every route. Worse, pasting a secret from an earlier attempt made the PC consume
-   the new one before its unwrap failed, because §5.4 claims delivery before it tries. An
+   the new one before its unwrap failed, because Â§5.4 claims delivery before it tries. An
    attempt now starts with no secret; the waiting screen offers Scan and Paste for the PC's QR
    while the attempt is live; the poll omits `secret=` until one has been adopted; and a poll
    that returns `error` *because the secret is still missing* is treated as the cue to scan
@@ -600,7 +602,7 @@ failing, for five unrelated reasons — any one of which would have been enough 
 3. **The client was closed before it was used.** `PairingService` closed its HTTP client in a
    `finally` wrapped around the pairing *request*, then used that same closed client for every
    poll of the attempt. Each poll failed with `Client is already closed`, so the credentials
-   could never be collected however correct the secret was — and the only symptom was a retry
+   could never be collected however correct the secret was â€” and the only symptom was a retry
    loop that reads like the PC being flaky.
 4. **A successful pairing did not survive being saved.** `MachineStore.loadAll` rebuilt each
    machine from the index, and the index is only a pointer list (`deviceId`, `host`, `port`);
@@ -609,14 +611,14 @@ failing, for five unrelated reasons — any one of which would have been enough 
    correct secret sitting on disk next to it. There were no round-trip tests for the store at
    all; there are eight now.
 5. **A paired phone landed on a blank screen.** `ConnectionNotifier.build` called
-   `_attachSocket` and `_refresh` inline, and both read and assign `state` — which Riverpod
-   does not initialise until `build` has returned — then ended with `return state`. Opening any
+   `_attachSocket` and `_refresh` inline, and both read and assign `state` â€” which Riverpod
+   does not initialise until `build` has returned â€” then ended with `return state`. Opening any
    paired PC threw `ProviderException: Tried to use a provider that is in error state` and the
    shell rendered as blank grey. The widget tests built the shell with *nothing* paired, which
    is exactly the state that does not trigger it.
 
-On the rebuilt APK the same script, unchanged, completes: discovery → six-digit code →
-approval on the PC → secret read from the QR → credentials decrypted → machine stored →
+On the rebuilt APK the same script, unchanged, completes: discovery â†’ six-digit code â†’
+approval on the PC â†’ secret read from the QR â†’ credentials decrypted â†’ machine stored â†’
 dashboard **Live**, streaming signed telemetry over the WebSocket (CPU, memory, GPU,
 290 processes, 5067 threads, 12 logical processors). The device id the phone reports,
 `181d76c2797b6128`, is the one the agent has on file.
@@ -629,7 +631,7 @@ fix: `esirc install` reports *created* and *started*, and the service reaches `R
 
 **Still open, and it matters for a machine you are not standing at.** After this machine
 rebooted, the installed service never came back, and `sc start` answered 87 with no
-delete-pending key — on a registration the installer had itself produced and that had run for
+delete-pending key â€” on a registration the installer had itself produced and that had run for
 two and a half hours beforehand. The cause was not established. What was *ruled out*, by
 building probe services rather than by argument: an unquoted `ImagePath` over a path with
 spaces (a probe with the identical key starts and runs), the `WOW64 = 0x14c` 32-bit flag the
@@ -661,7 +663,7 @@ three minutes of monitoring - where the previous build produced a timeout every 
 
 **A fifth, found by launching Notepad from the phone: every command that carries a body was
 failing, and only GETs ever looked right.** `EsiApi._perform` wrote `Content-Type` inside an
-`else if` on the *unsigned* branch - so it was attached to pairing (which is unsigned, §3) and
+`else if` on the *unsigned* branch - so it was attached to pairing (which is unsigned, Â§3) and
 to nothing else. Every signed `POST` or `PUT` went out with a body and no media type, and
 ASP.NET cannot bind a body it cannot identify: it answers **415** from the body binder, before
 the endpoint's code runs at all.
@@ -683,23 +685,23 @@ that. Six tests were added to `signed_request_test.dart`, the file that already 
 **A sixth, found by cancelling a pairing instead of completing one: the form never came back
 to life.** `_start` awaits the future `context.push('/pairing')` returns, and that future's
 `finally` is the only thing that clears the `_busy` which greys out `Check address` and
-`Pair`. The pairing screen left its route with `context.go('/onboarding')` — from *Start
-again* and from the empty state's *Back* — and `go` replaces the whole stack instead of
+`Pair`. The pairing screen left its route with `context.go('/onboarding')` â€” from *Start
+again* and from the empty state's *Back* â€” and `go` replaces the whole stack instead of
 popping it. go_router completes a pushed route's future only from `_completeRouteMatch`,
 which runs on a pop, so the `go` abandoned the await: `finally` never ran, and because
 `/onboarding` is the base route its `State` is *reused* rather than recreated, so the form
 came back still `_busy` with both buttons dead until the app was restarted. Both exits pop
 now; `go` survives only for arriving at the pairing screen without having been pushed, where
-there is nothing to pop. The new widget test drives the real path — fill the form, *Pair*,
-let the attempt fail, *Start again* — and asserts both buttons are live again; run against
+there is nothing to pop. The new widget test drives the real path â€” fill the form, *Pair*,
+let the attempt fail, *Start again* â€” and asserts both buttons are live again; run against
 the previous code it fails with `Expected: not null / Actual: <null>` for `Pair`. On the
-device, Cancel → Stop → Back hands the form back with both buttons enabled and the address
+device, Cancel â†’ Stop â†’ Back hands the form back with both buttons enabled and the address
 and 44-character pin untouched.
 
 **A seventh, found on a real phone against a real PC: the pairing window was ten seconds
 long.** The phone created an attempt, the PC showed its prompt with the code, and the phone
-then failed with *"The pairing window closed before it was approved"* — four times, always
-after 8.2 seconds, always nine polls. Nothing in the log looked wrong: `POST /pair/request →
+then failed with *"The pairing window closed before it was approved"* â€” four times, always
+after 8.2 seconds, always nine polls. Nothing in the log looked wrong: `POST /pair/request â†’
 201`, then a poll a second, then silence, then a fresh attempt thirty seconds later.
 
 The window is the agent's `pairingWindowSeconds` counted from the moment it created the
@@ -710,7 +712,7 @@ behind real time. That put the end of the stamp only ~10 s into the phone's futu
 `.clamp(10, 900)` handed the whole 120 second window to its 10 second floor: the phone gave
 up while the agent was still holding the attempt open, waiting for somebody to click
 Approve. The Android emulator paired happily throughout, because an emulator's clock is
-slaved to the host's and so was wrong by the same 110 s — which is why nothing in the test
+slaved to the host's and so was wrong by the same 110 s â€” which is why nothing in the test
 suite had ever caught it.
 
 Both halves are fixed. The PC's clock is now correct, and `w32tm` cannot put it back the way
@@ -720,20 +722,20 @@ machine's clock from another's: it reads `serverTime` from the agent's handshake
 instead of a difference between two clocks, so no offset in either can shorten it. The
 countdown on the pairing screen reads from the same number, so it stops lying too. Five tests
 assert the property for lags of 0 to 600 s in both directions, and record what the old rule
-computed on that PC: `clamp(10, 900)` → `10`.
+computed on that PC: `clamp(10, 900)` â†’ `10`.
 
 **An eighth, and the reason the seventh was so hard to find: the Approve button on the PC did
-nothing at all.** The seventh produced a symptom — *"The pairing window closed before it was
-approved"* — that pointed squarely at the clock, and the clock *was* wrong, and fixing it
+nothing at all.** The seventh produced a symptom â€” *"The pairing window closed before it was
+approved"* â€” that pointed squarely at the clock, and the clock *was* wrong, and fixing it
 changed nothing. This is what was underneath. The phone asked, the PC showed its prompt with
-the code, somebody clicked **Allow this device**, the dialog closed — and the attempt stayed
+the code, somebody clicked **Allow this device**, the dialog closed â€” and the attempt stayed
 pending until it expired, so the phone was told the window had closed. Four attempts, four
-`POST /pair/request → 201`, four runs of a one-second poll, and not one line in the log between
+`POST /pair/request â†’ 201`, four runs of a one-second poll, and not one line in the log between
 them: an approval that was never recorded because it was never applied.
 
 Two separate breaks, either of which alone is fatal. **One:** `ShowPairingPromptAsync`
 completed its task with `form.Decision` read *before* `form.ShowDialog()`, and
-`PairingPromptForm.Decision` starts life as `TimedOut` — so the outcome was `expired` before the
+`PairingPromptForm.Decision` starts life as `TimedOut` â€” so the outcome was `expired` before the
 user had been offered a choice, whatever they then pressed. **Two:** the service learned the
 outcome through `SessionAgentBridge.PairingApprovalRequested`, an event that had a declaration
 and exactly one `?.Invoke` and **no subscriber anywhere in the solution**, so a correct report
@@ -747,17 +749,17 @@ asserting that was "the same object the prompt's answer is routed to". That was 
 nothing had checked. It is now a test.
 
 The decision is read after the dialog closes, arrives as a `PairingDecisionReport` carrying a
-`PairingOutcome`, and is applied by `AgentHostedService` — approve, deny, or expire, each with
-its audit entry — with the reach a pairing grants defined once on `PairingManager` so the
+`PairingOutcome`, and is applied by `AgentHostedService` â€” approve, deny, or expire, each with
+its audit entry â€” with the reach a pairing grants defined once on `PairingManager` so the
 desktop and the CLI cannot drift apart. Three integration tests feed in the exact
 `pairing.result` message the session agent sends and assert the attempt's state and the sealed
 credentials that follow; with the subscription removed, two of the three fail. On the installed
-agent: `pending` → click **Allow this device** → `approved`, `deviceId ef9ad8efc29100d3`,
+agent: `pending` â†’ click **Allow this device** â†’ `approved`, `deviceId ef9ad8efc29100d3`,
 `keyId 1`, envelope present, and `Approved Desktop e2e from the desktop prompt` in the log.
 
 **A ninth, and the one that decided whether the product was finished: the agent never
 started after a reboot.** The service was registered, `Start` was `Automatic`, and every boot
-produced SCM 7000 *"The parameter is incorrect"* — while the same executable, launched by hand,
+produced SCM 7000 *"The parameter is incorrect"* â€” while the same executable, launched by hand,
 ran perfectly and bound 48220. That mismatch is the whole reason it was hard: the agent's own
 log had no line after the boot timestamp, so the process never reached its first one and there
 was nothing to read. Everything visible said the registration was fine.
@@ -766,10 +768,10 @@ It was not. `requiredPrivileges` was written as **REG_SZ**, holding all three pr
 space-separated string. The SCM reads that value as a REG_MULTI_SZ and looks each element up as
 a privilege name, so it searched for a privilege actually called *"SeTcbPrivilege
 SeShutdownPrivilege SeAssignPrimaryTokenPrivilege"*, found nothing, and refused to launch the
-image at all — `ERROR_INVALID_PARAMETER`, which `sc start` reports as 87. Written as a real
+image at all â€” `ERROR_INVALID_PARAMETER`, which `sc start` reports as 87. Written as a real
 multi-string, the identical registration starts on the first attempt.
 
-Two things had to change. The value is written as REG_MULTI_SZ — and via `reg.exe`, because
+Two things had to change. The value is written as REG_MULTI_SZ â€” and via `reg.exe`, because
 `RegWriteMultiStringValue` takes `RootKey` as an `HKEY` and its payload as a plain string, so it
 cannot express three separate privileges at all; the terminating `\0` on the last element
 matters too, since `reg.exe` rejects the `\0\0` the documentation shows. And the installer's
@@ -780,30 +782,30 @@ and the setup log says *"Verified: the agent service is running and the logon ta
 registered."*
 
 Two earlier theories were wrong and are now ruled out with evidence rather than argument. The
-unquoted `ImagePath` over a path with spaces is real — `sc create` consumes the outer quotes —
+unquoted `ImagePath` over a path with spaces is real â€” `sc create` consumes the outer quotes â€”
 and it changes nothing: the SCM started the service with the path exactly as the installer
 leaves it. And the 32-bit `sc.exe` stamping `WOW64` is gone from the key, and the service still
 failed.
 
 **A tenth, and the one that made the product unpairable by a human: the phone could not
 obtain the certificate pin at all.** Every other defect on this list broke something. This one
-removed the only way in. The app disables its `Pair` button until the pin field is non-empty —
-correctly, because the pin is what makes the connection worth trusting — and its own help text
+removed the only way in. The app disables its `Pair` button until the pin field is non-empty â€”
+correctly, because the pin is what makes the connection worth trusting â€” and its own help text
 says to read it "from the PC's pairing screen, or scan its QR code". The pin *was* on the
 pairing page, as text. Scanning it was impossible: every QR the agent emitted was built from a
 pairing **attempt**, whose URL carries the address and the one-time secret but never the pin,
 and an attempt only exists after a phone has already asked to pair. So the app's `Scan` button
 could fill the address and never the pin, the `Pair` button stayed disabled, and the only route
-left was reading 44 characters of base64 off a monitor and typing them on a soft keyboard — where
+left was reading 44 characters of base64 off a monitor and typing them on a soft keyboard â€” where
 `l`, `I`, `1`, `0` and `O` are the same glyph to a human and autocorrect is one keystroke away.
 The way in required the thing you could only get by being already inside.
 
-The idle pairing page now shows a second QR, carrying `esiremotepc://pair?host=…&port=…&
-deviceId=…&pin=…` — no attempt, therefore no secret, just what the phone needs before it is
+The idle pairing page now shows a second QR, carrying `esiremotepc://pair?host=â€¦&port=â€¦&
+deviceId=â€¦&pin=â€¦` â€” no attempt, therefore no secret, just what the phone needs before it is
 able to ask. One scan fills address, port and pin, and the rest of the flow already worked. It
 discloses nothing an attacker on the LAN did not already have: the pin is in the
 unauthenticated `GET /handshake` by design, which is exactly why the app will not take it from
-there. What the QR adds is the out-of-band hop — nothing on the network path can alter the
+there. What the QR adds is the out-of-band hop â€” nothing on the network path can alter the
 pixels on that screen, so the phone ends up comparing itself against what the user is actually
 looking at. And because the page is usually opened *on the PC*, where the host is `localhost`
 and the QR would be useless, it now says so and names the addresses that would work instead.
@@ -813,41 +815,41 @@ emits that exact string, `QrEncoderTests` round-trips it through an independent 
 it survives encoding, and `pairing_qr_test.dart` feeds the same string to `PairingQr.parse` and
 reads address, port, device id and pin back. Writing the test found a smaller bug in the same
 area: `PairingQr`'s own doc comment promised a second accepted shape,
-`esiremotepc://pair/192.168.1.42?…`, which put the address in the **path** while the parser
-read `uri.host` — so it silently did not work.
+`esiremotepc://pair/192.168.1.42?â€¦`, which put the address in the **path** while the parser
+read `uri.host` â€” so it silently did not work.
 
 **Re-verified end to end on the delivered APK**, against the installed service:
 
 | | |
 |---|---|
-| Fresh pairing from a cleared app: discovery → six-digit code → QR secret pasted → `esirc pair approve` → `POST /pair/request → 201` → credentials → **dashboard Live** | device `fe6343821655eac1`, key 1 |
-| **The same run with the phone's clock set 109 s ahead of the PC's** — the failure above, reproduced on purpose | countdown `85s` → `67s`, a full window; **Paired** as `bca92023c70adb41`, dashboard Live at 264 processes |
-| Cold start after a force-stop: the stored PC comes back as `10.0.2.2:48220 — paired — key 1`, `Open` → `GET /handshake 200` → `whoami 200` → **dashboard Live** | sampled 20:53:48, 263 processes |
-| The live stream actually moved: sampled 18:42:16 → 18:42:29, CPU 75 % → 78 %, 271—273 processes, 4754—4814 threads | a frame a second over the WebSocket, not a cached reading |
-| `GET /power/status → 200`, machine `online`, `E-K\META PC`, signed in `yes`, last boot 7 h ago | the Power tab |
+| Fresh pairing from a cleared app: discovery â†’ six-digit code â†’ QR secret pasted â†’ `esirc pair approve` â†’ `POST /pair/request â†’ 201` â†’ credentials â†’ **dashboard Live** | device `fe6343821655eac1`, key 1 |
+| **The same run with the phone's clock set 109 s ahead of the PC's** â€” the failure above, reproduced on purpose | countdown `85s` â†’ `67s`, a full window; **Paired** as `bca92023c70adb41`, dashboard Live at 264 processes |
+| Cold start after a force-stop: the stored PC comes back as `10.0.2.2:48220 â€” paired â€” key 1`, `Open` â†’ `GET /handshake 200` â†’ `whoami 200` â†’ **dashboard Live** | sampled 20:53:48, 263 processes |
+| The live stream actually moved: sampled 18:42:16 â†’ 18:42:29, CPU 75 % â†’ 78 %, 271â€”273 processes, 4754â€”4814 threads | a frame a second over the WebSocket, not a cached reading |
+| `GET /power/status â†’ 200`, machine `online`, `E-K\META PC`, signed in `yes`, last boot 7 h ago | the Power tab |
 | `GET /apps/list` renders the catalog with launch and close actions | the Apps tab |
-| `POST /apps/launch → 200` and `POST /apps/edge/terminate → 200` (15 processes) | signed requests **with a body** — the case that used to be 415 |
-| Cancel → Stop → Back after a live attempt: `Check address` and `Pair` both re-enabled, address and 44-character pin intact | D32 above |
-| **The on-desktop prompt, clicked for real**: attempt → prompt window → click *Allow this device* → poll `pending` → poll `approved` with `deviceId ef9ad8efc29100d3`, `keyId 1` and a sealed envelope, and `Released the pairing secrets` in the log | D34 above — the path the whole product depends on and which no test had ever exercised |
-| **The service starts, from a registration that would not start before**: after the reinstall `requiredPrivileges` is a `MultiString` with three elements, `sc start` succeeds, 48220 is listening and the session agent connects | D27 above — `REG_SZ` to `REG_MULTI_SZ`, and the installer's verification now checks *running*, not just *registered* |
-| **Verified against a real boot, twice**: rebooted at 16:29 on 4 October and the agent did not come up; rebooted at 16:28:24 on 5 October and it logged its first line **ten seconds later, unprompted**, with no SCM event, then the session agent connected 30 s after that | the log line that would have answered this in one look — the first line of start-up — never existed before, because the process was never created |
-| **`installer/install-cycle-test.ps1` against the delivered installer: 29 checks, 0 failed** across clean install → install over its own output → uninstall → install again, each step asking whether the port answers | and the `requiredPrivileges` assertions among them are the ones D27 needed |
-| **The idle pairing page now serves a QR that carries the pin**: `GET /pairing` contains `/pairing/qr.svg?connect=1`, `?connect=1` returns `image/svg+xml`, and the connect URL round-trips through the QR encoder's independent decoder | D35 below — the loop that made the app unpairable by hand, and the **APK is unchanged**, so a phone that already has it can now scan the QR |
+| `POST /apps/launch â†’ 200` and `POST /apps/edge/terminate â†’ 200` (15 processes) | signed requests **with a body** â€” the case that used to be 415 |
+| Cancel â†’ Stop â†’ Back after a live attempt: `Check address` and `Pair` both re-enabled, address and 44-character pin intact | D32 above |
+| **The on-desktop prompt, clicked for real**: attempt â†’ prompt window â†’ click *Allow this device* â†’ poll `pending` â†’ poll `approved` with `deviceId ef9ad8efc29100d3`, `keyId 1` and a sealed envelope, and `Released the pairing secrets` in the log | D34 above â€” the path the whole product depends on and which no test had ever exercised |
+| **The service starts, from a registration that would not start before**: after the reinstall `requiredPrivileges` is a `MultiString` with three elements, `sc start` succeeds, 48220 is listening and the session agent connects | D27 above â€” `REG_SZ` to `REG_MULTI_SZ`, and the installer's verification now checks *running*, not just *registered* |
+| **Verified against a real boot, twice**: rebooted at 16:29 on 4 October and the agent did not come up; rebooted at 16:28:24 on 5 October and it logged its first line **ten seconds later, unprompted**, with no SCM event, then the session agent connected 30 s after that | the log line that would have answered this in one look â€” the first line of start-up â€” never existed before, because the process was never created |
+| **`installer/install-cycle-test.ps1` against the delivered installer: 29 checks, 0 failed** across clean install â†’ install over its own output â†’ uninstall â†’ install again, each step asking whether the port answers | and the `requiredPrivileges` assertions among them are the ones D27 needed |
+| **The idle pairing page now serves a QR that carries the pin**: `GET /pairing` contains `/pairing/qr.svg?connect=1`, `?connect=1` returns `image/svg+xml`, and the connect URL round-trips through the QR encoder's independent decoder | D35 below â€” the loop that made the app unpairable by hand, and the **APK is unchanged**, so a phone that already has it can now scan the QR |
 | The SPKI pin is unchanged by the rebuild, so the value already on the pairing form is still correct | the certificate lives in `agent.pfx`, not in the binary |
 | 415 responses since `Content-Type` was fixed | **zero** - the single 415 in today's log is the 12:31 run that found D31 |
 
-Also on this same agent binary, from the previous APK rebuild: `POST /power/wake → 200` and
-`POST /apps/notepad/terminate → 200` (Notepad 0 → 2 → 0). The installer is unchanged from the
-hash at the top of this file. The agent is **not** the same binary it was before D34 — the
-desktop prompt's answer is applied by the service, which it previously never was — so this
+Also on this same agent binary, from the previous APK rebuild: `POST /power/wake â†’ 200` and
+`POST /apps/notepad/terminate â†’ 200` (Notepad 0 â†’ 2 â†’ 0). The installer is unchanged from the
+hash at the top of this file. The agent is **not** the same binary it was before D34 â€” the
+desktop prompt's answer is applied by the service, which it previously never was â€” so this
 installer carries a real agent change. Before that it was byte-identical, and the three fixes
 before it were in Dart: two navigation, one the pairing window described above.
 
 **Known gaps**, all recorded rather than papered over: the remote-control foreground service
 is wired but not started from the remote screen; three Gradle workarounds were needed
 because this build machine's network returns 404 for every `dl.google.com` path (all three
-are commented in place and are no-ops on a normal network). `docs/API.md` §15 and
-`docs/SECURITY.md` §12 list the rest.
+are commented in place and are no-ops on a normal network). `docs/API.md` Â§15 and
+`docs/SECURITY.md` Â§12 list the rest.
 
 See `../docs/` for the full documentation, and `../docs/SECURITY.md` for the threat model
 and its limits.
@@ -1127,7 +1129,7 @@ frame count: `mean brightness 0.00` across 2,073,600 sampled pixels is not a slo
 is an empty screen.
 
 **Verified end to end.** The Stream panel on a paired phone now shows the PC desktop, with
-`frame 119 · 1920×1080 · 16/16 tiles`. After the fix the same probe reports mean brightness
+`frame 119 Â· 1920Ã—1080 Â· 16/16 tiles`. After the fix the same probe reports mean brightness
 24.94 with 95.23% non-black pixels.
 
 brightness `0.00` with a single distinct colour across 2,073,600 sampled pixels. Capture is returning a
@@ -1162,6 +1164,20 @@ One device is still paired: a26aa882c6b329fd, the emulator that ran this. It can
 authenticate from anywhere real, and seven of the eight slots are free. To remove it:
 stop the agent, esirc pair revoke a26aa882c6b329fd, start it again.
 
+## 1.1.0
+
+The first release outside a hotfix cycle, and the version plumbing proved itself before it
+mattered: `Directory.Build.props` now carries 1.1.0, the installer's `AppVersion` was raised
+beside it, and build.ps1's cross-check passed against both. The rebuilt APK was read back:
+`versionName='1.1.0' versionCode='3'` — checked in the artifact, not assumed from pubspec.
+
+The served health endpoint reports `"version":"1.1.0"` after the upgrade install on the
+reporting machine (exit 0, pairing 2/8 preserved, counters available). Three new things ride
+the version, not fixes: the app's About panel now carries the **Windows agent download**
+rows (GitHub `latest` for the installer, the current release's APK for Android), backed by a
+separate `esi_remote/links` platform channel that only ever opens URLs the app knows — the
+failure branch is surfaced as a toast, not swallowed.
+
 ## 1.0.1
 
 The version now lives in one place per artifact and is checked against each other. Directory.Build.props
@@ -1187,7 +1203,7 @@ protocol.
 `EsiWsFrame.encode()` emitted only `p`, `t`, `id` and `data`. It dropped every other field the
 class held. So the phone could not send `code` at all - it had nowhere to send it.
 
-The fields it did have were being stuffed into `data` instead. PROTOCOL.md §7.2 puts them at
+The fields it did have were being stuffed into `data` instead. PROTOCOL.md Â§7.2 puts them at
 the top level, and `WsClientFrame` reads them from there:
 
 ```json
@@ -1290,4 +1306,5 @@ at the same time.
 It travels service to session agent as part of the prompt command, resolved from the same
 `CertificateAuthority` that logs it. When it is absent the prompt says where to look rather than
 showing a blank gap.
+
 

@@ -1,5 +1,11 @@
 # ESI Remote PC 1.0.1 — release notes
 
+> **Carried forward.** Release **1.1.0** is this same narrative, promoted: the
+> phone-as-the-PC's-speaker work, the GPU telemetry chain (D85, D90, D91), the scanner that
+> speaks (D88) and the ack that is no longer a state (D89) all shipped inside the 1.0.1-series
+> prerelease train, and 1.1.0 is where the train stopped and the version number hopped. Every
+> entry below describes code that is in the 1.1.0 installer and APK as well.
+
 Everything below was a bug someone could see. Each entry says what it looked like from the
 phone, because that is the only description a user has when they report it; the commit that
 fixed it is named at the end of each one so it can be followed back to the reasoning and to

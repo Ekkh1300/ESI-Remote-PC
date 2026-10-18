@@ -13,8 +13,8 @@
 
 #define AppName        "ESI Remote PC"
 #define AppPublisher   "ESI Remote PC"
-#define AppVersion     "1.0.1"
-#define AppURL         "https://github.com/esi/remote-pc"
+#define AppVersion     "1.1.0"
+#define AppURL         "https://github.com/Ekkh1300/ESI-Remote-PC"
 
 ; Must match ProtocolConstants.DefaultHttpsPort. The firewall rule below uses it too.
 #define HttpsPort      48220

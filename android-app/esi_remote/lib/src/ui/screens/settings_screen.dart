@@ -9,6 +9,7 @@ import '../../protocol/models.dart';
 import '../../protocol/protocol_constants.dart';
 import '../../state/connection.dart';
 import '../../state/features.dart';
+import '../../links.dart';
 import '../format.dart';
 import '../shell.dart';
 import '../theme.dart';
@@ -836,27 +837,63 @@ class _AboutPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const version = '1.0.0';
+    const version = '1.1.0';
     return EsiPanel(
       title: 'About',
       tick: false,
-      child: EsiReadoutList(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          EsiDetailRow(label: 'App', value: 'ESI Remote PC'),
-          EsiDetailRow(label: 'Version', value: version),
-          EsiDetailRow(label: 'App id', value: 'com.esi.remotepc'),
-          const EsiDetailRow(label: 'Wire protocol', value: 'ESIV1'),
-          const EsiDetailRow(
-            label: 'Request signing',
-            value: 'HMAC-SHA256 over an 8-line canonical string',
+          EsiReadoutList(
+            children: <Widget>[
+              EsiDetailRow(label: 'App', value: 'ESI Remote PC'),
+              EsiDetailRow(label: 'Version', value: version),
+              EsiDetailRow(label: 'App id', value: 'com.esi.remotepc'),
+              const EsiDetailRow(label: 'Wire protocol', value: 'ESIV1'),
+              const EsiDetailRow(
+                label: 'Request signing',
+                value: 'HMAC-SHA256 over an 8-line canonical string',
+              ),
+              const EsiDetailRow(
+                label: 'Key derivation',
+                value: 'HKDF-SHA256, salt "ESI-RemotePC/v1"',
+              ),
+              const EsiDetailRow(
+                label: 'Transport',
+                value: 'TLS 1.3 with SPKI pinning, signed requests',
+              ),
+            ],
           ),
-          const EsiDetailRow(
-            label: 'Key derivation',
-            value: 'HKDF-SHA256, salt "ESI-RemotePC/v1"',
+          const SizedBox(height: EsiSpace.md),
+          // The PC half of this pair has to come from somewhere, and a phone that
+          // controls PCs it cannot point at installs nothing. GitHub's `latest` alias
+          // resolves to the newest non-prerelease release, so this row outlives
+          // every future version number without an edit here.
+          OutlinedButton.icon(
+            onPressed: () async {
+              final failure = await EsiLinks.openWindowsDownload();
+              if (failure != null && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(failure)),
+                );
+              }
+            },
+            icon: const Icon(Icons.desktop_windows_outlined, size: 18),
+            label: const Text('Windows agent — download from GitHub'),
           ),
-          const EsiDetailRow(
-            label: 'Transport',
-            value: 'TLS 1.3 with SPKI pinning, signed requests',
+          const SizedBox(height: EsiSpace.sm),
+          OutlinedButton.icon(
+            onPressed: () async {
+              final failure = await EsiLinks.open(EsiLinks.androidApkUrl);
+              if (failure != null && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(failure)),
+                );
+              }
+            },
+            icon: const Icon(Icons.android, size: 18),
+            label: const Text('Android app — latest APK'),
           ),
         ],
       ),

@@ -10,7 +10,7 @@
       this sets; the installer takes AppVersion from its own .iss, and build.ps1 checks the two
       agree so a release cannot be cut with a mismatched pair.
     -->
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

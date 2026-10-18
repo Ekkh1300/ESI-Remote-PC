@@ -66,6 +66,34 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // The links channel is deliberately separate from the audio channel: opening a URL
+        // has nothing to do with playback, and a handler that grows until it covers both is
+        // how the "one channel, one concern" shape quietly dies.
+        val links = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "esi_remote/links")
+        links.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "open" -> {
+                    val url = call.argument<String>("url")
+                    if (url.isNullOrBlank()) {
+                        result.error("bad_request", "open needs a url", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        startActivity(
+                            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                        result.success(null)
+                    } catch (e: Exception) {
+                        // No browser, or the URL scheme has no handler: the error message is
+                        // what the Dart side shows, so keep it readable, not the exception.
+                        result.error("open_failed", "The link could not be opened.", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     private fun start(sampleRate: Int, channels: Int, result: MethodChannel.Result) {
