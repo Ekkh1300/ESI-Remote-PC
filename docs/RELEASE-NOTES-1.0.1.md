@@ -224,15 +224,57 @@ packet meter, and total silence. The host now normalises the argument: a bare By
 accepted as the payload (the shape that ships), and a Map spelling is accepted beside it for
 symmetry with `start`. *(D86)*
 
+**And the room still had two mouths on it.** Once the phone is the PC's speaker, the PC's own
+speakers keep talking — the confirmation of the feature ("I hear the PC through the phone")
+arrived together with its first defect report ("so why is the PC still playing?"). The request to
+close the room's other mouth is now explicit, and it lives where the thing it governs lives: a
+**"Silence the PC's own speakers"** switch under the speaker button, on by default — default
+because the phone-as-speaker reading is the feature the way a wireless one is. While the stream
+runs, the session agent mutes the PC's default output endpoint, and lifts the mute on every path
+that closes the capture: a stop, the panel switch, the socket dropping, the session agent
+exiting.
+
+The answer itself is a preference, not a state: it rides the phone's own protected storage, is
+read at the moment of every request (so nothing can fork from a cached copy, and an
+auto-resumed stream after a dropped socket re-asks it exactly as it re-asks the PC), and
+survives a reinstall the way the pairing does. Flipping it mid-stream closes the capture and
+re-opens it — around three hundred milliseconds of dip the meter shows — because the PC reads
+the flag only when the capture opens.
+
+The mechanism was measured before it was trusted, on the machine that asked for the switch: a
+440 Hz probe tone through the default output, tapped by the exact WASAPI loopback setup the
+pump uses, at a peak of **5 143 muted against 5 144 unmuted** — so on this machine the endpoint
+mute takes effect *after* the loopback tap and silences the room without silencing the stream.
+That is a measured fact about one device, not a law of audio: a driver that applies volume
+inside the audio engine mutes both the room and the tap. Nothing hides that case — the phone's
+silence meter says "the PC is capturing correctly but not playing anything right now", which is
+exactly what it looks like — and the switch is one flip away.
+
+The edge that actually mattered is a run dying between mute and unmute. A ledger in the
+registry (`HKCU\…\RemotePc`, value `SessionLocalOutputSilenced`) is written only after our mute
+lands on the endpoint — a mute the endpoint refuses leaves no trace at all — and the session
+agent, at every startup, reads the ledger and lifts upright whatever a dead run left tuned over.
+One silence the agent never touches is already established: an endpoint the *user* muted
+themselves is engaged into zero times, its ledger untouched, and released into nothing — the
+user's speakers obey the user, and the agent claims only the mute it actually took.
+
+Pinned the same way as everything else: 9 C# tests hold the silencer's contract against fakes —
+engaging, releasing, double-release, refusal leaving no ledger trace, a failed-unmute surviving
+for the next run, recovery lifting only what the ledger names — and the phone pins the wire
+shape: `silenceLocal` rides `audio.start` at the top level, and a toggle that is off sends the
+flag's *absence*, byte-for-byte the frame an older phone sent. *(D87)*
+
 **What is not claimed.** Verified in the same way as before — wire format pinned to the PC
-encoder's constants, the native player present in the built APK — plus what the October 16
-sessions on two real phones established mechanically: `audio.start` reaches the PC and the PC
-captures and streams its output device (411 packets in eight seconds on the first phone), the
-phone plays and stops without crashing, and the disconnect path ends the capture on the PC side.
-Still not verified — the one thing this feature exists for — is somebody *hearing* the PC's
-sound on the phone while the PC plays something. That is why this is a prerelease rather than
-the 1.0.1 tag, and why the meter exists: the next session will say which of the two silences it
-meets — absent PC sound, or absent stream — instead of leaving the report unanswerable.
+encoder's constants, the native player present in the built APK — plus what earlier sessions on
+two real phones established mechanically: `audio.start` reaches the PC and the PC captures and
+streams its output device (411 packets in eight seconds on the first phone), the phone plays and
+stops without crashing, and the disconnect path ends the capture on the PC side. And, since the
+October 17 session, the one thing this feature exists for is verified the only way it can be:
+the PC's sound *heard* on the user's phone while the PC plays, on the user's own hardware
+through their own ears. What remains device-dependent is named rather than hidden: a driver
+that applies volume inside the audio engine silences the loopback tap together with the room
+(measured case above, D87), and that case announces itself as the meter's silence reading — not
+as a question nobody can answer.
 
 **The screen could not be shown full screen.** On a phone the stream was one column of five
 inside a panel — about a hundred pixels tall, with the rest of the display given over to chrome

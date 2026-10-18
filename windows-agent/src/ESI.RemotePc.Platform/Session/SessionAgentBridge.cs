@@ -624,11 +624,15 @@ public sealed class SessionAgentBridge : ISessionAgentBridge, IAsyncDisposable, 
     /// opens asynchronously and can refuse several hundred milliseconds later, so the truth
     /// only exists in the session agent's log and on the phone's meter.
     /// </remarks>
-    public bool RequestAudio(string deviceId)
+    public bool RequestAudio(string deviceId, bool silenceLocal = false)
         => Send(new SessionCommandEnvelope
         {
             T = SessionChannelProtocol.Commands.AudioStart,
             DeviceId = deviceId,
+            // Null when the phone did not ask to silence the PC's own speakers (or is an older
+            // phone that cannot ask at all), so an agent can tell "no request" from "not
+            // requested" without a second wire.
+            SilenceLocal = silenceLocal ? true : null,
         });
 
     public bool StopAudio(string deviceId)

@@ -20,6 +20,12 @@ public sealed class WsClientFrame
     [JsonPropertyName("grid")] public int[]? Grid { get; set; }
     [JsonPropertyName("inputEnabled")] public bool? InputEnabled { get; set; }
     [JsonPropertyName("intervalMs")] public int? IntervalMs { get; set; }
+
+    /// <summary>
+    /// True when the phone asked the PC to silence its own speakers while the phone carries
+    /// its sound (D87). Absent from an older phone, which the PC reads as "no silencing".
+    /// </summary>
+    [JsonPropertyName("silenceLocal")] public bool? SilenceLocal { get; set; }
     [JsonPropertyName("input")] public RemoteInputRequest? Input { get; set; }
     [JsonPropertyName("code")] public string? Code { get; set; }
     [JsonPropertyName("text")] public string? Text { get; set; }

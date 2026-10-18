@@ -55,11 +55,24 @@ internal sealed class AudioPump : IDisposable
     private long _dropped;
     private long _sent;
     private long _oddBytes;
+    private LocalOutputSilencer? _silencer;
 
     public AudioPump(Serilog.ILogger log, SessionChannel channel)
     {
         _log = log;
         _channel = channel;
+    }
+
+    private LocalOutputSilencer Silencer
+    {
+        get
+        {
+            _silencer ??= new LocalOutputSilencer(
+                new MMDeviceEndpointMute(),
+                new RegistrySilencerLedger(),
+                new SerilogLoggerAdapter<LocalOutputSilencer>(_log));
+            return _silencer;
+        }
     }
 
     /// <summary>
@@ -95,8 +108,14 @@ internal sealed class AudioPump : IDisposable
     /// </remarks>
     public long DiscardedOddBytes => Interlocked.Read(ref _oddBytes);
 
-    /// <summary>Opens the default output device for loopback capture. Safe to call twice.</summary>
-    public void Start(string deviceId)
+    /// <summary>
+    /// Opens the default output device for loopback capture. Safe to call twice.
+    /// </summary>
+    /// <param name="deviceId">Accepted for compatibility with the wire contract; the capture
+    /// always taps the default output device, so the value is recorded but not used.</param>
+    /// <param name="silenceLocal">True when the phone asked for the PC's own speakers to be
+    /// silenced while the phone carries the sound (D87).</param>
+    public void Start(string deviceId, bool silenceLocal = false)
     {
         lock (_gate)
         {
@@ -115,6 +134,14 @@ internal sealed class AudioPump : IDisposable
             lock (_carried)
             {
                 _carried.Clear();
+            }
+
+            // Before the capture opens, not after: muted-before-first-buffer means no unmuted
+            // moment escapes to the room at all, however short the gap between the two would
+            // have been the other way round.
+            if (silenceLocal)
+            {
+                Silencer.Engage();
             }
 
             WasapiLoopbackCapture capture;
@@ -214,6 +241,11 @@ internal sealed class AudioPump : IDisposable
         {
             _log.Debug(ex, "The loopback device did not dispose cleanly.");
         }
+
+        // After the device is gone, not before: while the capture still runs, releasing the
+        // mute would put the PC's sound back into the room while the phone was still legally
+        // the one carrying it.
+        _silencer?.Release();
 
         _log.Information("Audio capture stopped after {Sent} packets ({Dropped} dropped)",
             Interlocked.Read(ref _sent), Interlocked.Read(ref _dropped));

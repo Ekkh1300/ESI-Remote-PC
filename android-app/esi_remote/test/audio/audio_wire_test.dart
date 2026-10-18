@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:esi_remote/src/audio/mu_law.dart';
@@ -233,6 +234,49 @@ void main() {
 
       expect(speaker.dropped, 1);
       expect(speaker.packetsPlayed, 1);
+    });
+  });
+
+  group('the audio.start frame (D87)', () {
+    // The PC reads `silenceLocal` from WsClientFrame - a field of the frame itself, not of
+    // any nested map. These cases pin the two shapes the PC must be able to parse: the
+    // asked-for silencing on the flag, and the default off in the flag's ABSENCE, which is
+    // what an older phone sent and every agent tolerated.
+    test('the flag rides the frame at the top level, not inside a map', () {
+      final frame = EsiWsFrame.audioStart('a+1', silenceLocal: true);
+      final json = jsonDecode(frame.encode()) as Map<String, dynamic>;
+
+      expect(json['t'], 'audio.start');
+      expect(json['id'], 'a+1');
+      expect(json['silenceLocal'], isTrue);
+      expect(json.containsKey('data'), isFalse, reason: 'not a `data` payload - the D51 road again');
+    });
+
+    test('the default frame has no silenceLocal key at all', () {
+      final json = jsonDecode(EsiWsFrame.audioStart('a+2').encode()) as Map<String, dynamic>;
+
+      expect(json.containsKey('silenceLocal'), isFalse,
+          reason: 'absent is what an older phone sent; the byte-shape must not change for a '
+              'phone running with the toggle off');
+    });
+
+    test('remote.start still spreads its parameters at the top level (D51 regression)', () {
+      // The D87 frame work refactored the helper remoteStart builds through; these five
+      // keys sat at the top level before that refactor and must still sit there now.
+      final json = jsonDecode(EsiWsFrame.remoteStart(
+        id: 'r+1',
+        displayId: 2,
+        fps: 30,
+        quality: 80,
+        grid: const <int>[2, 3],
+        inputEnabled: false,
+      ).encode()) as Map<String, dynamic>;
+
+      expect(json['displayId'], 2);
+      expect(json['fps'], 30);
+      expect(json['quality'], 80);
+      expect(json['grid'], <dynamic>[2, 3]);
+      expect(json['inputEnabled'], isFalse);
     });
   });
 }

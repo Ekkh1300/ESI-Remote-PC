@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../audio/phone_speaker.dart';
+import '../data/speaker_settings.dart';
 import '../net/esi_ws.dart';
 import '../protocol/models.dart';
 import 'connection.dart';
@@ -154,6 +155,13 @@ class SpeakerNotifier extends Notifier<SpeakerState> {
     _message = null;
     _autoResume = true;
 
+    // The D87 answer is read at the moment of the request, not cached in a field: there is
+    // no cached copy to fork from the store, and an auto-resume after a dropped socket
+    // re-asks the store as naturally as it re-asks the PC. A store that has never been
+    // written answers the store's own default - true, the feature itself.
+    final silenceLocal =
+        await ref.read(speakerSettingsProvider).silenceLocal();
+
     // The listener is attached before the request is written, not after it. The reply can
     // arrive on the next turn of the event loop, and this runs over a LAN, so a listener
     // attached after the send can miss a confirmation that was already given - and then wait
@@ -181,7 +189,7 @@ class SpeakerNotifier extends Notifier<SpeakerState> {
           onTimeout: () => null,
         );
 
-    socket.startAudio(requestId);
+    socket.startAudio(requestId, silenceLocal: silenceLocal);
 
     // This is the half that was missing. Without it the switch reported on the moment the
     // track opened, and a PC that had refused - no session agent running, another phone
@@ -226,6 +234,26 @@ class SpeakerNotifier extends Notifier<SpeakerState> {
     // parameter awaits it, and `async` is what gives the closure the `Future<void>` return the
     // caller waits on rather than a bare `void`.
     await _speaker.stop(onStopped: socket == null ? null : () async => socket.stopAudio());
+  }
+
+  /// Commits the D87 answer - whether the PC's own speakers should be silenced while the
+  /// phone carries its sound.
+  ///
+  /// The answer is persisted before anything is re-requested of the PC, so a battery death
+  /// between persist and restart leaves the preference standing: what the user said is
+  /// stronger than what the machine was doing when it died. An ongoing capture is closed
+  /// and re-requested, because the PC reads the flag only when the capture opens - leaving
+  /// it running would keep the old answer in force until the next manual stop, and a switch
+  /// that does nothing while the stream is on is a control that lies.
+  ///
+  /// The stop-then-start is accepted, not hidden: around three hundred milliseconds of
+  /// silence while the PC closes and reopens the device, which the meter shows as a dip.
+  Future<void> setSilenceLocal(bool value) async {
+    await ref.read(speakerSettingsProvider).setSilenceLocal(value);
+    if (state == SpeakerState.on || state == SpeakerState.starting) {
+      await stop();
+      unawaited(start());
+    }
   }
 
   void _fail(String why) {

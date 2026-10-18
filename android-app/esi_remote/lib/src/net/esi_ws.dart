@@ -265,8 +265,8 @@ class EsiWebSocket implements EsiWebSocketHandle {
   }
 
   @override
-  void startAudio(String requestId) {
-    send(EsiWsFrame.audioStart(requestId));
+  void startAudio(String requestId, {bool silenceLocal = false}) {
+    send(EsiWsFrame.audioStart(requestId, silenceLocal: silenceLocal));
   }
 
   @override
@@ -362,7 +362,12 @@ abstract class EsiWebSocketHandle {
   /// Takes the id so the answer to *this* request can be listened for before it is written
   /// (the reply can arrive on the next turn of the event loop) and picked out from the one
   /// still in flight for a `stop` the user just made - see [audioStateFor].
-  void startAudio(String requestId);
+  ///
+  /// [silenceLocal] is the D87 request: the PC's own speakers are silenced while the phone
+  /// carries the sound, and restored when the stream ends. Sent only when the user asked for
+  /// it, so an agent too old to know it simply captures without silencing - the flag rides
+  /// the frame at the top level, exactly where the PC reads it from.
+  void startAudio(String requestId, {bool silenceLocal = false});
 
   /// Stops the PC streaming its audio.
   ///
@@ -559,7 +564,13 @@ class EsiWsFrame {
     bool inputEnabled = true,
   }) =>
       EsiWsFrame(p: EsiProtocol.version, type: 'remote.start', id: id)
-          ._withRemote(displayId, fps, quality, grid, inputEnabled);
+          ._withRemote(<String, dynamic>{
+        'displayId': displayId,
+        'fps': fps,
+        'quality': quality,
+        'grid': grid,
+        'inputEnabled': inputEnabled,
+      });
 
   static EsiWsFrame remoteStop(String id) =>
       EsiWsFrame(p: EsiProtocol.version, type: 'remote.stop', id: id);
@@ -567,11 +578,16 @@ class EsiWsFrame {
   /// Asks the agent to open the PC's output device for loopback capture, so the phone can
   /// play what the PC is playing (PROTOCOL.md §7.2).
   ///
-  /// Carries no parameters: the PC captures its own default output device, so there is
-  /// nothing to choose. The reply is an `audio.state` frame saying whether the *request*
+  /// [silenceLocal] rides the frame at the **top level**, not in `data` (D51's rule): WsClientFrame
+  /// reads `silenceLocal` as a field of its own. Only sent when true - absent means "no
+  /// silencing" to every agent, old or new, so a phone with the toggle off is byte-for-byte
+  /// what it always was. The reply is an `audio.state` frame saying whether the *request*
   /// was accepted - the device opens asynchronously and can still refuse afterwards.
-  static EsiWsFrame audioStart(String id) =>
-      EsiWsFrame(p: EsiProtocol.version, type: 'audio.start', id: id);
+  static EsiWsFrame audioStart(String id, {bool silenceLocal = false}) =>
+      EsiWsFrame(p: EsiProtocol.version, type: 'audio.start', id: id)
+          ._withRemote(<String, dynamic>{
+        if (silenceLocal) 'silenceLocal': true,
+      });
 
   /// Stops the loopback capture. The counterpart to [audioStart].
   static EsiWsFrame audioStop(String id) =>
@@ -615,28 +631,15 @@ class EsiWsFrame {
         data: <String, dynamic>{'channels': channels},
       );
 
-  EsiWsFrame _withRemote(
-    int displayId,
-    int fps,
-    int quality,
-    List<int> grid,
-    bool inputEnabled,
-  ) =>
-      // D51: same defect, and it is why the Stream settings had no effect either - every
-      // slider was serialised into `data` while WsClientFrame reads these from the top level
-      // (PROTOCOL.md §7.2 shows remote.start with displayId/fps/quality/grid/inputEnabled
-      // beside the frame type). The agent fell back to its own defaults every time.
-      EsiWsFrame(
+  /// Carries what the PC reads at the top level; the map is spread into the frame JSON by
+  /// the encoder (see the `...?remote` line in [EsiWsFrame.encode]). Takes the keys it is
+  /// given, so `remote.start`'s five D51 parameters and `audio.start`'s D87 flag ride the
+  /// same road without a helper page per type.
+  EsiWsFrame _withRemote(Map<String, dynamic> topLevel) => EsiWsFrame(
         p: p,
         type: type,
         id: id,
-        remote: <String, dynamic>{
-          'displayId': displayId,
-          'fps': fps,
-          'quality': quality,
-          'grid': grid,
-          'inputEnabled': inputEnabled,
-        },
+        remote: topLevel,
       );
 
   EsiWsFrame _withKey(

@@ -75,10 +75,39 @@ internal sealed class SessionAgentRuntime : ApplicationContext
         _channel.CommandReceived += OnCommandAsync;
     }
 
+    /// <summary>
+    /// Undoes a mute the previous session agent committed and never lifted, if one is in the
+    /// ledger. Somewhere else to put the try, so the startup story only reads the recovery
+    /// story.
+    /// </summary>
+    private void RecoverLocalMute()
+    {
+        try
+        {
+            new Esi.Platform.Audio.LocalOutputSilencer(
+                new MMDeviceEndpointMute(),
+                new RegistrySilencerLedger(),
+                new SerilogLoggerAdapter<Esi.Platform.Audio.LocalOutputSilencer>(_log))
+                .Recover();
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "The local-output mute could not be revisited at startup; if the speakers were left " +
+                "muted by a dead run, the next run will lift it.");
+        }
+    }
+
     public void Run()
     {
         _log.Information("ESI Remote PC session agent starting (session {Session}, user {User})",
             _options.SessionId, Environment.UserName);
+
+        // D87: whatever a previous run committed on the endpoint and never got to undo - it
+        // died between mute and unmute - is undone here, before anything that could commit a
+        // new one. The ledger is the only witness that distinguishes our mute from the user's,
+        // and it lives in the registry, outliving every process.
+        RecoverLocalMute();
 
         _desktop.Start();
         _desktop.StateChanged += OnDesktopStateChanged;
@@ -302,7 +331,7 @@ internal sealed class SessionAgentRuntime : ApplicationContext
                 // opens asynchronously and can refuse afterwards; the honest confirmation is the
                 // phone's meter moving, and the failure is in this agent's log. Claiming success
                 // here would put the two on different stories and the user in the middle.
-                _audioPump.Start(command.DeviceId ?? "");
+                _audioPump.Start(command.DeviceId ?? "", command.SilenceLocal == true);
                 await CommandResultAsync(
                     command,
                     "audio.start",

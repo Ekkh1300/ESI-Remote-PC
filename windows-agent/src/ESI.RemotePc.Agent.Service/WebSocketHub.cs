@@ -162,14 +162,15 @@ public sealed class RemoteService
     /// separate costs: audio continues even where screen capture is refused, and a user who turns
     /// the picture off has not asked to silence the phone.
     /// </remarks>
-    public bool StartAudio(string deviceId)
+    public bool StartAudio(string deviceId, bool silenceLocal = false)
     {
         if (!sessionAgent.IsConnected)
             return false;
 
-        audit.Record(AuditLog.ActionRemoteStarted, "ok", deviceId, detail: "pc audio (loopback)");
+        audit.Record(AuditLog.ActionRemoteStarted, "ok", deviceId,
+            detail: silenceLocal ? "pc audio (loopback), PC speakers silenced" : "pc audio (loopback)");
 
-        return sessionAgent.RequestAudio(deviceId);
+        return sessionAgent.RequestAudio(deviceId, silenceLocal);
     }
 
     public void StopAudio(string deviceId)
@@ -770,7 +771,7 @@ public sealed class WebSocketHub
             _streamGate.Release();
         }
 
-        var started = remote.StartAudio(connection.DeviceId);
+        var started = remote.StartAudio(connection.DeviceId, frame.SilenceLocal == true);
 
         // The reply reports what the agent said about *delivering* the request, not whether the
         // device opened - the same distinction the session agent makes one hop further along, and

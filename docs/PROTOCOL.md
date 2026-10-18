@@ -836,17 +836,29 @@ answered with `error` / `esi_forbidden_scope` and has no effect.
 { "p":1, "t":"remote.input","id":"r3", "input": { "…": "see §7.3" } }
 { "p":1, "t":"remote.key",  "id":"r4", "code":"KeyA", "text":"a", "down":true, "mods":["ctrl"] }
 { "p":1, "t":"gaming.watch","id":"g1", "intervalMs":1000 }
-{ "p":1, "t":"audio.start", "id":"a1" }
+{ "p":1, "t":"audio.start", "id":"a1", "silenceLocal":true }
 { "p":1, "t":"audio.stop",  "id":"a2" }
 ```
 
 `audio.start` opens the PC's default output device for loopback capture and streams what is
-playing there back down the same socket, so the phone can be the PC's speaker. It carries no
-parameters: the PC captures its own default device, so there is nothing to choose. Both frames
-require the `control` scope. The reply is an `audio.state` frame (§7.5) whose `active` field
-reports whether the *request* was accepted - the device opens asynchronously and can still
-refuse afterwards, so the honest confirmation is the phone's meter moving, and any later
-failure is in the agent's log.
+playing there back down the same socket, so the phone can be the PC's speaker. The capture
+always taps the default device; `silenceLocal` (D87) is the one optional field a start can
+carry. Both frames require the `control` scope. The reply is an `audio.state` frame (§7.5)
+whose `active` field reports whether the *request* was accepted - the device opens
+asynchronously and can still refuse afterwards, so the honest confirmation is the phone's meter
+moving, and any later failure is in the agent's log.
+
+`silenceLocal` asks the agent to mute the PC's own output endpoint while the capture runs,
+so the sound comes from the phone alone, and to unmute it on every path that closes the
+capture. An agent that cannot honour it - too old to know the field, or a device whose driver
+mutes inside the audio engine, taking the loopback tap with the room - simply captures
+*unmuted*, which is why the field is optional and why `false` is spelled as **absence**: a
+phone with the toggle off sends byte-for-byte the frame phones sent before the field existed.
+The endpoint's mute state before the request is the user's: an already-muted endpoint is never
+engaged and never released - the agent claims and lifts only a mute it actually took, with a
+registry ledger written between the two so a run that dies mid-stream cannot leave the
+speakers muted for ever; the next run's startup reads the ledger and lifts upright whatever it
+left behind (D87).
 
 ### 7.3 Remote input schema
 

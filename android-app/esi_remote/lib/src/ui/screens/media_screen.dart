@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../data/speaker_settings.dart';
 import '../../protocol/models.dart';
 import '../../protocol/protocol_constants.dart';
 import '../../state/audio.dart';
@@ -255,6 +258,7 @@ class _SpeakerPanel extends ConsumerWidget {
               ),
             ],
           ),
+          _SilenceLocalToggle(),
           if (state != SpeakerState.off) _SpeakerMeter(tickerKey: state),
           if ((state == SpeakerState.failed || state == SpeakerState.reconnecting) &&
               notifier.message != null) ...<Widget>[
@@ -267,6 +271,73 @@ class _SpeakerPanel extends ConsumerWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The D87 switch in [_SpeakerPanel]: whether the PC's own speakers go silent while
+/// this phone carries the PC's sound.
+///
+/// A widget with its own copy of the answer rather than a provider read in build, because
+/// the answer lives behind flutter_secure_storage - a platform channel a build cannot
+/// await. It loads once when the row is first laid out and everything after that is
+/// optimistic: the switch turns first and the commit follows, and the commit (through the
+/// speaker notifier, not around it) restarts an already-running capture, since the PC
+/// reads the flag only when the capture opens.
+class _SilenceLocalToggle extends ConsumerStatefulWidget {
+  const _SilenceLocalToggle();
+
+  @override
+  ConsumerState<_SilenceLocalToggle> createState() => _SilenceLocalToggleState();
+}
+
+class _SilenceLocalToggleState extends ConsumerState<_SilenceLocalToggle> {
+  /// Null until the store answers; the switch shows the store's default (true) before
+  /// that, which is the answer the store would give anyway.
+  bool? _committed;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(ref
+        .read(speakerSettingsProvider)
+        .silenceLocal()
+        .then((persisted) => mounted ? setState(() => _committed = persisted) : null));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = _committed ?? true;
+    return Padding(
+      padding: const EdgeInsets.only(top: EsiSpace.sm),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text('Silence the PC\'s own speakers', style: EsiType.body.copyWith(fontSize: 13)),
+                Text(
+                  'While the stream plays, the PC mutes itself and the sound comes from '
+                  'here only. Changing it restarts the stream - a moment of silence.',
+                  style: EsiType.body.copyWith(fontSize: 11, color: EsiPalette.faint),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: value,
+            onChanged: (next) {
+              // Optimistic: the switch moves now, the store and the PC follow. If the
+              // store refuses, the next layout corrects it - and the store refusing is
+              // a storage fault this row cannot fix from here anyway.
+              setState(() => _committed = next);
+              unawaited(ref.read(speakerProvider.notifier).setSilenceLocal(next));
+            },
+          ),
         ],
       ),
     );

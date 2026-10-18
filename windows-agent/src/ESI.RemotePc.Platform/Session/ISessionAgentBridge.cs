@@ -120,7 +120,13 @@ public interface ISessionAgentBridge
     /// asynchronously and can refuse several hundred milliseconds later, so the truth only
     /// exists in the session agent's log and on the phone's meter.
     /// </remarks>
-    bool RequestAudio(string deviceId);
+    /// <param name="deviceId">The device the request belongs to, for audit lines.</param>
+    /// <param name="silenceLocal">True when the phone asked the PC's own speakers to be
+    /// silenced while the phone carries the sound (D87). The session agent commits the mute
+    /// before the capture opens and lifts it on every path that closes the capture,
+    /// including a stopped session; a dead process is covered by the ledger, restored at
+    /// the next run's startup.</param>
+    bool RequestAudio(string deviceId, bool silenceLocal = false);
 
     /// <summary>Closes the loopback device.</summary>
     bool StopAudio(string deviceId);
@@ -359,6 +365,13 @@ public sealed class SessionCommandEnvelope
 
     /// <summary>The virtual key to inject, for <see cref="Commands.MediaKey"/>.</summary>
     public int? VirtualKey { get; set; }
+
+    /// <summary>
+    /// True when the phone asked the PC to silence its own speakers while the phone carries
+    /// its sound (D87). Absent from an older phone, which simply means "no silencing" - the
+    /// capture works identically in both cases.
+    /// </summary>
+    public bool? SilenceLocal { get; set; }
 
     /// <summary>How many times to press it, for <see cref="Commands.MediaKey"/>.</summary>
     public int? Repeats { get; set; }

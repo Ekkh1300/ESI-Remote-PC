@@ -14,26 +14,34 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  2454F372BAD469A0D6D82B79FDD282D8508D4A05827904A71AF89136446D0792
-ESI-RemotePC-1.0.1.apk             470DCBF82A67BE9C65CB9CE1ABF7E4ABBBFC19A74BE8083BD20A8B8061D4A08C
+ESI-RemotePC-Setup-1.0.1-x64.exe  4C8BDA32FAE80783F47A754654322917AFE2D0CE0629CAB35CEF07660050712A
+ESI-RemotePC-1.0.1.apk             83C5ED834F76EF0FF73D3A4E302EA68859C33814750522C84451337BDA9AFF44
 ```
 
 Both hashes change whenever their side of the project changes. If you downloaded an earlier copy of
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 9. **The installer changed** because the GPU Engine
-instance names Windows actually writes - `pid_…_luid_…`, measured on 541 rows of this machine's
-own counters - were all rejected by a parser that only accepted the documented
-`luid_…`-leading shape, so the GPU channel read zero on every modern Windows machine. **The APK
-changed** because the Android host refused every audio write the Dart side sent: the bytes
-arrive as the arguments themselves, the host looked them up as a Map entry and threw
-ClassCastException on all 2 281 of them - an open track, a climbing meter, and total silence.
+Both files have moved since prerelease 10. **The APK changed** because the speaker grew its
+switch: the D87 answer rides `audio.start` as a top-level field, the preference lives in the
+phone's protected storage, and flipping it mid-stream closes and re-opens the capture. **The
+installer changed** because the session agent now engages the silencer before the capture
+opens, reads the flag from the pipeline envelope, and recovers a dead run's leftover mute at
+every startup.
 Rebuilding either file reproduces these hashes.
 
 ## What this build fixes
 
-Twenty-five, each measured rather than suspected.
+Twenty-six, each measured rather than suspected.
+
+**The room kept its second mouth open.** The phone plays the PC's sound ("confirmed on a real
+device, finally") — and the PC's own speakers kept playing the same thing beside it. The
+speaker panel now carries **"Silence the PC's own speakers"**, on by default: while the stream
+runs, the PC mutes its default output endpoint and unmutes on every path that closes the
+capture. The mechanism was measured first on the machine that asked — a 440 Hz tone tapped
+at peaks 5 143 muted / 5 144 unmuted — so the endpoint mute silences the room without touching
+the stream, and a registry ledger plus a startup recovery weigh the one edge where a run dies
+between the two. *(D87)*
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought
 five labels their vertical room by giving up a strip of the phone's width on *every* screen - 74

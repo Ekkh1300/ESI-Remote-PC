@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:esi_remote/src/audio/phone_speaker.dart';
+import 'package:esi_remote/src/data/speaker_settings.dart';
 import 'package:esi_remote/src/net/esi_api.dart';
 import 'package:esi_remote/src/net/esi_ws.dart';
 import 'package:esi_remote/src/protocol/models.dart';
@@ -52,6 +53,10 @@ class _FakeSocket extends EsiWebSocket {
   /// "we did not ask a dead socket to stop" is the kind of fact that must be measured.
   int stopRequests = 0;
 
+  /// The D87 flag the latest `audio.start` carried, so the tests can pin not only that a
+  /// request went out but what it asked of the PC's speakers.
+  bool? lastSilenceLocal;
+
   /// The next answer is delivered as a delayed inactive one, whatever the queue said.
   bool deliverInactiveLate = false;
 
@@ -72,9 +77,10 @@ class _FakeSocket extends EsiWebSocket {
   }
 
   @override
-  void startAudio(String requestId) {
+  void startAudio(String requestId, {bool silenceLocal = false}) {
     startRequested = true;
     startRequests++;
+    lastSilenceLocal = silenceLocal;
     if (_sent >= _replies.length) return;
 
     final reply = _replies[_sent++];
@@ -136,12 +142,18 @@ class _StaticActiveDeviceNotifier extends ActiveDeviceNotifier {
   void setDevice(String deviceId) => state = deviceId;
 }
 
-ProviderContainer _containerFor(_FakeSocket socket) => ProviderContainer(
+ProviderContainer _containerFor(_FakeSocket socket,
+        {SpeakerSettings? settings}) =>
+    ProviderContainer(
       overrides: [
         webSocketProvider.overrideWithValue(socket),
         phoneSpeakerProvider.overrideWith((ref) => PhoneSpeaker(channel: _unusedChannel)),
         connectionProvider.overrideWith(() => _StaticConnectionNotifier()),
         activeDeviceIdProvider.overrideWith(() => _StaticActiveDeviceNotifier()),
+        // The D87 preference rides the platform's secure storage, which does not exist
+        // under a test: an in-memory store answers on its behalf, defaulting to the
+        // feature's own default unless a test seeds it.
+        speakerSettingsProvider.overrideWithValue(settings ?? SpeakerSettings.inMemory()),
       ],
     );
 
@@ -362,5 +374,80 @@ void main() {
     expect(container.read(speakerProvider), SpeakerState.reconnecting,
         reason: 'the late answer belongs to the re-drop, not to the restart');
     expect(notifier.message, contains('connection dropped'));
+  });
+
+  group('D87: silencing the PC while the phone carries the sound', () {
+    test('the default asks the PC to silence itself', () async {
+      final socket = _FakeSocket(const <AudioState>[AudioState(active: true)]);
+      final container = _containerFor(socket);
+      addTearDown(container.dispose);
+
+      await container.read(speakerProvider.notifier).start();
+
+      expect(socket.lastSilenceLocal, isTrue,
+          reason: 'nothing persisted yet, so the store answers its own default - true, '
+              'the feature itself: the phone IS the PC speaker');
+      expect(container.read(speakerProvider), SpeakerState.on);
+    });
+
+    test('a store answer of false rides the request as false', () async {
+      final socket = _FakeSocket(const <AudioState>[AudioState(active: true)]);
+      final container = _containerFor(socket,
+          settings: SpeakerSettings.inMemory(<String, String>{
+            'speaker.silenceLocal': 'false',
+          }));
+      addTearDown(container.dispose);
+
+      await container.read(speakerProvider.notifier).start();
+
+      expect(socket.lastSilenceLocal, isFalse,
+          reason: 'the user said the room keeps the PC mouth open, and the request must '
+              'ask exactly what the user said');
+    });
+
+    test('toggling while nothing plays only persists; no request goes anywhere', () async {
+      final socket = _FakeSocket(const <AudioState>[AudioState(active: true)]);
+      final container = _containerFor(socket);
+      addTearDown(container.dispose);
+
+      await container.read(speakerProvider.notifier).setSilenceLocal(false);
+      await _settle();
+
+      expect(container.read(speakerProvider), SpeakerState.off);
+      expect(socket.startRequests, 0,
+          reason: 'a preference update is not a permission to open a capture');
+      final store = container.read(speakerSettingsProvider);
+      expect(await store.silenceLocal(), isFalse);
+    });
+
+    test('toggling while playing closes the capture and re-asks with the new answer', () async {
+      // TWO replies are queued, not one: the restart is a whole second request, and a PC
+      // answers a second request just as it answered the first. One reply would leave the
+      // restart waiting on an answer the fake never sends - a broken fake, not a bug.
+      final socket = _FakeSocket(const <AudioState>[
+        AudioState(active: true),
+        AudioState(active: true),
+      ]);
+      final container = _containerFor(socket);
+      addTearDown(container.dispose);
+
+      final notifier = container.read(speakerProvider.notifier);
+      await notifier.start();
+      expect(socket.lastSilenceLocal, isTrue);
+
+      await notifier.setSilenceLocal(false);
+      // The restart is unawaited inside the notifier (a toggle must not block on the PC),
+      // so the settle rounds carry it the whole way: the second start re-reads the store
+      // before it attaches its listener, one microtask more than a first start has.
+      await _settle(8);
+
+      expect(socket.stopRequests, greaterThanOrEqualTo(1),
+          reason: 'the running capture must be closed: the PC reads the flag only when '
+              'the capture opens, so leaving it running would keep the old answer in force');
+      expect(socket.startRequests, 2, reason: 'one restart, carrying the new answer');
+      expect(socket.lastSilenceLocal, isFalse);
+      expect(container.read(speakerProvider), SpeakerState.on,
+          reason: 'the stream comes back; only its silencing changed');
+    });
   });
 }

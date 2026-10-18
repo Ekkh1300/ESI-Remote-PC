@@ -172,7 +172,7 @@ class MachineStore {
   /// An in-memory store, used by tests and by the widget tree in `flutter test` where no
   /// platform channel exists.
   factory MachineStore.inMemory([Map<String, String>? seed]) =>
-      MachineStore(_InMemorySecureStorage(seed ?? <String, String>{}));
+      MachineStore(InMemorySecureStorage(seed ?? <String, String>{}));
 
   Future<List<PairedMachine>> loadAll() async {
     final raw = await _storage.read(key: _indexKey);
@@ -270,8 +270,12 @@ class MachineStore {
 
 /// [FlutterSecureStorage] with the same surface, backed by a map. Lets the whole app run
 /// under `flutter test`, where no platform channel exists.
-class _InMemorySecureStorage implements FlutterSecureStorage {
-  _InMemorySecureStorage(this._values);
+///
+/// Public because it is not only MachineStore's test double: any store that rides the same
+/// backing (SpeakerSettings, D87) tests through the same map, rather than the app breeding
+/// one look-alike per file.
+class InMemorySecureStorage implements FlutterSecureStorage {
+  InMemorySecureStorage(this._values);
 
   final Map<String, String> _values;
 
