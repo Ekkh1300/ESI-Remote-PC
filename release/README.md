@@ -14,7 +14,7 @@ What changed, and what it looked like before each fix, is in
 SHA-256:
 
 ```
-ESI-RemotePC-Setup-1.0.1-x64.exe  1546443301C8719E7B044A79B90BDB3F14F3C55CE80541B542EAD778630E4752
+ESI-RemotePC-Setup-1.0.1-x64.exe  D507295E8BBD762F59355C771F80D71C18C43A48034724DB6A283245C9B350B9
 ESI-RemotePC-1.0.1.apk             3A8101E8881D4CB6C7C6F488BE65649B32DB3BE64E7AFF45824F17537B1AB860
 ```
 
@@ -22,16 +22,27 @@ Both hashes change whenever their side of the project changes. If you downloaded
 either file it will not match, and that is expected - the block above is the current one, and the
 two files in this directory always agree with it.
 
-Both files have moved since prerelease 12. **The installer changed** because the GPU inventory
-query was dead since its first writing — a SELECT list with no FROM clause, swallowed into an
-empty list, and the empty failure cached so the room read "Adapters reporting 0" forever
-(D90). **The APK did not move this time** — PC-side only, and its bytes are identical to
-prerelease 12's.
+Both files have moved since prerelease 13. **The installer changed** because the per-adapter
+GPU memory read decoded its counter through the wrong union member and served zero bytes on
+a card mid-render (D91). **The APK did not move** — PC-side only; its bytes are identical to
+prereleases 12 and 13.
 Rebuilding either file reproduces these hashes.
 
 ## What this build fixes
 
-Twenty-nine, each measured rather than suspected.
+Thirty, each measured rather than suspected.
+
+**The adapter memory read zero while the desktop rendered.** The Graphics card's per-adapter
+"Memory" line comes from the `GPU Adapter Memory(*)` counters — read as 64-bit byte counts
+(LARGE format) but decoded through the union's *double* member, so 845,787,136
+bytes arrived as a subnormal that passed the "greater than zero" gate and (long)-cast to
+exactly 0. typeperf on the same machine measured 845,787,136 bytes a second apart from our
+0. The decode now picks the union member the format asked for — pinned three ways
+(that 845,787,136 decodes as 845,787,136 bytes; that the old re-read provably casts to 0 for
+any realistic VRAM; that double-format paths still decode as doubles) — and a live pin holds
+the desktop's real VRAM figure through the served path. Measured after the fix, live:
+the served row carries `memoryUsedBytes = 1,182,089,216` (~1.10 GB) on the card mid-render,
+where it read 0 before. *(D91)*
 
 **The GPU inventory never asked which device it was counting.** The dashboard's Graphics card
 is filled from the video-controller inventory, and that inventory is one WMI query — the only

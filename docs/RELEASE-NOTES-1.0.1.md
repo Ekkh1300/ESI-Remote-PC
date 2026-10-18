@@ -424,6 +424,22 @@ WMI hiccup retries on the next read instead of being re-served as emptiness for 
 Measured after the fix, live: the inventory returns `AMD Radeon RX 6700 XT, vendor amd,
 primary` on the machine that reported the empty card. *(D90)*
 
+**And the adapter's own memory read zero while the desktop rendered.** The Graphics card's
+per-adapter "Memory" line comes from the `GPU Adapter Memory(*)` counters, read as 64-bit
+byte counts under the LARGE format — but decoded through the union's *double* member no
+matter what the read asked for. A byte count such as 845,787,136 lives entirely in the low
+32 bits of the native union, and those same 8 bytes re-read as an IEEE double are a
+subnormal (~1e-315): "greater than zero" passes the parser's sanity gate, and the (long)
+cast lands on exactly 0. typeperf, run a second apart on the same machine, measured
+845,787,136 dedicated bytes while the agent served a confident zero — so the phone's card
+read "0 bytes used" the whole time the desktop was composing on real VRAM. The decode now
+picks the union member the read format asked for: LARGE values decode through the integer
+member, DOUBLE values still through the double. Pinned three ways — 845,787,136 decodes as
+845,787,136 bytes; the old re-read provably casts to 0 for any realistic VRAM count; the
+double-format load path still decodes as a double — plus a live pin that refuses to bless
+zero on a rendering desktop. Measured after the fix: the served row carries
+1,182,089,216 bytes (~1.10 GB) where it read 0. *(D91)*
+
 ## Navigation
 
 **The left rail is gone; the buttons are a bar across the foot of the phone.** The rail bought

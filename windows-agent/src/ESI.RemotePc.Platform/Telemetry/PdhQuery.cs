@@ -220,7 +220,7 @@ public sealed unsafe class PdhQuery : IDisposable
                 if (value.CStatus is not (WinConst.PDH_CSTATUS_VALID_DATA or WinConst.PDH_CSTATUS_NEW_DATA))
                     continue;
 
-                result[name] = value.doubleValue;
+                result[name] = DecodeCounterValue(format, value);
             }
 
             return result;
@@ -235,6 +235,18 @@ public sealed unsafe class PdhQuery : IDisposable
             Marshal.FreeHGlobal(buffer);
         }
     }
+
+    /// <summary>
+    /// Decodes one formatted counter value according to the read format (D91). The native
+    /// value is a C union: <c>PDH_FMT_LARGE</c> fills the 64-bit integer member and
+    /// <c>PDH_FMT_DOUBLE</c> fills the double member - so reading <c>doubleValue</c> on a
+    /// LARGE read turns every byte count into a subnormal double that (long)-casts to zero.
+    /// That is exactly what the GPU adapter-memory path served while typeperf measured
+    /// 845,787,136 bytes on the same counter a second apart: keys present, every value
+    /// parsed-but-zero, the phone reading "0 bytes used" on a card mid-render.
+    /// </summary>
+    internal static double DecodeCounterValue(uint format, PDH_FMT_COUNTERVALUE value) =>
+        (format & WinConst.PDH_FMT_LARGE) != 0 ? value.largeValue : value.doubleValue;
 
     private readonly Dictionary<string, IntPtr> _wildcardHandles = new(StringComparer.OrdinalIgnoreCase);
 
