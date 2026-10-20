@@ -45,3 +45,10 @@
 - Android: `ESI-RemotePC-1.1.1.apk`
 
 معیارِ SHA-256 هر دو فایل در بخش «Assets» همین انتشار آمده است.
+
+## SHA-256
+
+```
+ESI-RemotePC-1.1.1.apk           72ac6202666196b4f4d81a3e010e94fafe6beca0dd398f41405b209e534211a7
+ESI-RemotePC-Setup-1.1.1-x64.exe 91e3ead0acf524b3bb751dca47e680c889b10c8288571caf280c79081e8e7ba2
+```
