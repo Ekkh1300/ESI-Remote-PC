@@ -4,7 +4,7 @@ publish_to: "none"
 
 # The version is part of the pairing handshake body (`appVersion`), so it must stay in
 # sync with what the Windows agent reports for itself.
-version: 1.1.0+3
+version: 1.1.1+4
 
 environment:
   sdk: ^3.13.4

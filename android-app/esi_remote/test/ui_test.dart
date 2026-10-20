@@ -168,6 +168,27 @@ void main() {
     });
   });
 
+  group('EsiCoreGrid', () {
+    testWidgets('D96: two cores under identical load are labelled distinctly', (tester) async {
+      // The label used to come from `chunk.indexOf(value)`, which answers with the
+      // FIRST column equal to `value` - so a pair of idle cores both showed the
+      // first one's index, and a busy desktop with many equal readings displayed
+      // a whole run of "4 4 4 4" where board indices belonged.
+      await tester.pumpWidget(_host(
+        SizedBox(
+          width: 400,
+          child: EsiCoreGrid(
+            perCore: <double>[100, 0, 0, 0, 0, 0, 0, 0],
+          ),
+        ),
+      ));
+      for (final label in <String>['0', '1', '2', '3', '4', '5', '6', '7']) {
+        expect(find.text(label), findsOneWidget,
+            reason: 'core $label must carry its own index');
+      }
+    });
+  });
+
   group('EsiPanel', () {
     testWidgets('shows its title and children', (tester) async {
       await tester.pumpWidget(_host(

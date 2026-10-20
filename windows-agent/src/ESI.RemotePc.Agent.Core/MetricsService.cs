@@ -23,6 +23,7 @@ public sealed class MetricsService : IDisposable
     private readonly NetworkProvider _network;
     private readonly TemperatureProvider _temperatures;
     private readonly NvmlProvider _nvml;
+    private readonly WmiClient _wmi;
 
     private readonly SemaphoreSlim _sampleGate = new(1, 1);
     private readonly List<LoadPoint> _history = [];
@@ -40,7 +41,8 @@ public sealed class MetricsService : IDisposable
         SystemInfoProvider systemInfo,
         NetworkProvider network,
         TemperatureProvider temperatures,
-        NvmlProvider nvml)
+        NvmlProvider nvml,
+        WmiClient wmi)
     {
         _log = log;
         _sampler = sampler;
@@ -48,10 +50,40 @@ public sealed class MetricsService : IDisposable
         _network = network;
         _temperatures = temperatures;
         _nvml = nvml;
+        _wmi = wmi;
     }
 
     /// <summary>Number of samples in the rolling history.</summary>
     public int HistoryLimit { get; set; } = 300;
+
+    /// <summary>
+    /// Reads the page files via <c>Win32_PageFileUsage</c> and sums them into the wire's
+    /// <c>swap</c> fields (D98). Zero on any failure - a machine with the page file
+    /// disabled IS a zero and must read as one, not as an unreported dash.
+    /// </summary>
+    private SwapMetrics SampleSwapMetrics()
+    {
+        var rows = _wmi.Query(
+            "SELECT Name, AllocatedBaseSize, CurrentUsage FROM Win32_PageFileUsage",
+            WmiClient.CimV2,
+            o => new SwapMetrics
+            {
+                TotalBytes = (WmiClient.GetValue<uint>(o, "AllocatedBaseSize") ?? 0) * 1024L * 1024L,
+                UsedBytes = (WmiClient.GetValue<uint>(o, "CurrentUsage") ?? 0) * 1024L * 1024L,
+            });
+
+        var result = new SwapMetrics();
+        foreach (var row in rows)
+        {
+            result = new SwapMetrics
+            {
+                TotalBytes = result.TotalBytes + row.TotalBytes,
+                UsedBytes = result.UsedBytes + row.UsedBytes,
+            };
+        }
+
+        return result;
+    }
 
     /// <summary>Returns the most recent sample, taking a fresh one when the cached one is stale.</summary>
     public async Task<MetricsResponse> GetAsync(int sampleWindowMs = 1000, CancellationToken ct = default)
@@ -136,6 +168,11 @@ public sealed class MetricsService : IDisposable
             CachedBytes = memory.CachedBytes,
             CommittedBytes = memory.CommittedBytes,
             CommitLimitBytes = memory.CommitLimitBytes,
+            // D98: the page-file rows used to stay at the contract's zero default, so the
+            // phone read "Page file 0 B" on a machine whose page file was carrying 600 MB
+            // of live commit. Win32_PageFileUsage reports MB; the read is cached by
+            // WmiClient's TTL, so a resize propagates within minutes, not per sample.
+            Swap = SampleSwapMetrics(),
         };
 
         // ---- GPU ---------------------------------------------------------------

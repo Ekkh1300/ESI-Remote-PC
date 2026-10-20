@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app_info.dart';
 import '../../data/machine_store.dart';
 import '../../net/esi_api.dart';
 import '../../protocol/esi_crypto.dart';
@@ -837,7 +838,7 @@ class _AboutPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const version = '1.1.0';
+    const version = esiAppVersion;
     return EsiPanel(
       title: 'About',
       tick: false,

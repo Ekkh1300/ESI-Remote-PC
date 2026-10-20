@@ -223,12 +223,19 @@ public sealed class SystemSampler : IDisposable
         // Commit figures come from GetPerformanceInfo, which is the documented way to get
         // system-wide commit limits; GlobalMemoryStatusEx's page-file numbers are
         // per-process for the virtual fields.
+        //
+        // D97: GetPerformanceInfo reports those figures as a COUNT OF PAGES, not bytes -
+        // the same page-size accounting as WORD in its own PERFORMANCE_INFORMATION docs.
+        // Serving them raw let a ~25 GB commit read as "6.3 MB" on a 16 GB machine, which
+        // is 4096x too small and never tripped a sanity check because the LIMIT was
+        // wrong by exactly the same factor. Both fields are scaled by the page size
+        // GetPerformanceInfo itself hands back.
         long? committed = null;
         long? commitLimit = null;
         if (Native.KERNEL32.GetPerformanceInfo(out var perf, (uint)System.Runtime.InteropServices.Marshal.SizeOf<PERFORMANCE_INFORMATION>()))
         {
-            committed = (long)perf.CommitTotal;
-            commitLimit = (long)perf.CommitLimit;
+            committed = (long)(perf.CommitTotal * perf.PageSize);
+            commitLimit = (long)(perf.CommitLimit * perf.PageSize);
         }
 
         long? cache = _pdh.ReadLarge("mem.cache");

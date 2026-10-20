@@ -22,7 +22,7 @@ class EsiLinks {
   /// The Android APK of the current release. `release/latest/download` serves the newest
   /// release's asset of that exact name without a page hop.
   static const String androidApkUrl =
-      'https://github.com/Ekkh1300/ESI-Remote-PC/releases/latest/download/ESI-RemotePC-1.1.0.apk';
+      'https://github.com/Ekkh1300/ESI-Remote-PC/releases/latest/download/ESI-RemotePC-1.1.1.apk';
 
   /// Opens a URL in the phone's browser through the host's `esi_remote/links` channel.
   ///

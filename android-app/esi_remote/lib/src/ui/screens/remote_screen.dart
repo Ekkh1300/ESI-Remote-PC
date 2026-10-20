@@ -355,10 +355,17 @@ class ScreenSurface {
     // composite of zero tiles is still a black rectangle. Saying how many tiles arrived
     // and how many decoded is what separates "the agent is not sending" from "we cannot
     // read what it sent". They look the same to the user.
-    debugPrint('frame ${header.frameIndex}: ${tiles.length} tiles offered, '
-        '${decoded.length} decoded, $failures failed, grid '
-        '${header.gridCols}x${header.gridRows}, surface '
-        '${header.screenWidth}x${header.screenHeight}');
+    //
+    // D94: the full account went to the log for every frame - about 900 lines a minute
+    // at 15 fps, which drowned logcat and cost the UI thread on a slow device. The log
+    // keeps the two states the counter existed to separate: nothing arriving at all,
+    // and arriving-but-undecodable. A healthy stream stays silent.
+    if (tiles.isEmpty || failures > 0) {
+      debugPrint('frame ${header.frameIndex}: ${tiles.length} tiles offered, '
+          '${decoded.length} decoded, $failures failed, grid '
+          '${header.gridCols}x${header.gridRows}, surface '
+          '${header.screenWidth}x${header.screenHeight}');
+    }
     for (final entry in decoded.entries) {
       _tiles.remove(entry.key)?.dispose();
       _tiles[entry.key] = entry.value;

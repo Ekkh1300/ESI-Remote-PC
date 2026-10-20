@@ -1,3 +1,4 @@
+import 'package:esi_remote/src/app_info.dart';
 import 'package:esi_remote/src/links.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -18,7 +19,15 @@ void main() {
     expect(
       EsiLinks.androidApkUrl,
       'https://github.com/Ekkh1300/ESI-Remote-PC/releases/latest/download/'
-      'ESI-RemotePC-1.1.0.apk',
+      'ESI-RemotePC-1.1.1.apk',
     );
+  });
+
+  // D93: the pairing flow used to carry its own copy of the version string, and
+  // only the About panel got bumped to 1.1.0 - so the PC's pairing prompt kept
+  // introducing the phone as "app 1.0.1". One constant, read everywhere, pinned
+  // here so the next bump that forgets it fails this suite.
+  test('every version string comes from the single esiAppVersion constant', () {
+    expect(esiAppVersion, '1.1.1');
   });
 }

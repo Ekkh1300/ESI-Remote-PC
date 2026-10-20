@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../app_info.dart';
 import '../data/machine_store.dart';
 import '../data/pairing_service.dart';
 import '../net/esi_api.dart';
@@ -74,7 +75,7 @@ class PairingFlowNotifier extends Notifier<PairingFlowState> {
       endpoint: request.endpoint,
       deviceName: _deviceName,
       osVersion: _osVersion,
-      appVersion: _appVersion,
+      appVersion: esiAppVersion,
       // The secret is not passed in: the service creates it and sends it with the request
       // (D39), so there is nothing to scan part-way through and no way for it to be wrong.
 
@@ -126,7 +127,6 @@ class PairingFlowNotifier extends Notifier<PairingFlowState> {
 
   void reset() => state = const PairingFlowState();
 
-  static const String _appVersion = '1.0.1';
   static const String _osVersion = '16';
   static const String _deviceName = 'Android phone';
 }

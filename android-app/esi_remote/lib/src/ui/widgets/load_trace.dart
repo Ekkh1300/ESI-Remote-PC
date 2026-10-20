@@ -503,7 +503,14 @@ class EsiCoreGrid extends StatelessWidget {
       rows.add(
         Row(
           children: <Widget>[
-            for (final value in chunk)
+            // D96: the loop used to run `for (final value in chunk)` and label
+            // each column with `start + chunk.indexOf(value)`. indexOf returns
+            // the FIRST column equal to `value`, so whenever two cores were
+            // under identical load - the common case on an idle desktop - both
+            // displayed the other's index, and a four-core row could read
+            // "0 1 0 3 4 1 6 7". Iterate by position instead; the label is
+            // then always the column's own index.
+            for (var i = 0; i < chunk.length; i++)
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.only(right: 3),
@@ -511,11 +518,11 @@ class EsiCoreGrid extends StatelessWidget {
                     children: <Widget>[
                       SizedBox(
                         height: 30,
-                        child: _CoreColumn(value: value),
+                        child: _CoreColumn(value: chunk[i]),
                       ),
                       const SizedBox(height: EsiSpace.xs),
                       Text(
-                        '${start + chunk.indexOf(value)}',
+                        '${start + i}',
                         style: EsiType.label.copyWith(fontSize: 8),
                       ),
                     ],
