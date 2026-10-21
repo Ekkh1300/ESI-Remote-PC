@@ -1,50 +1,49 @@
-# نسخهٔ ۱٫۱٫۱ — اصلاح‌های نمایش آمار و نسخه
+# v1.1.1 — fixed stats and identity reporting
 
-> سریعِ فهرست: چهار باگ اندازه‌گیری‌شده، فیکس و آزموده شد؛ دو تا از این
-> چهار تا اعدادِ اشتباه روی داشبورد نشان می‌دادند و دو تا رفتارِ
-> جفت‌سازی/استریمِ اپ را خراب می‌کردند.
+> Quick list: four bugs were measured, fixed, and tested. Two of them
+> showed wrong numbers on the dashboard; two broke the app's
+> pairing/stream behavior.
 
-## اصلاح‌های PC (نصب‌کنندهٔ ویندوزی)
+## PC fixes (Windows installer)
 
-1. **حجمِ Commit واقعی شد (D97).** اعداد «Committed / Commit limit» حافظه
-   به‌جای بایت، تعدادِ صفحهٔ حافظه فرستاده می‌شد — روی همین رایانه، ~۲۵ گیگابایت
-   کامیتِ واقعی به‌صورت «۶٫۳ مگابایت» و لیمیتِ ~۲۷ گیگ به‌صورت «۶٫۶ مگابایت»
-   خوانده می‌شد. حالا هر دو در اندازهٔ صفحه (۴ کیلوبایت) ضرب می‌شوند.
-2. **ردیفِ Page file دیگر همیشه صفر نیست (D98).** فیلدِ `swap` در پروتکل هرگز
-   پر نمی‌شد؛ ماشینی با فایل‌صفحهٔ ۱۰٫۸ گیگابایتی و ۶۳۱ مگابایت مصرفِ زنده
-   روی گوشی «Page file 0 B» می‌خواند. حالا از `Win32_PageFileUsage` خوانده و
-   جمع می‌شود (با کشِ TTLِ WMI).
+1. **Memory "Committed" is now real (D97).** The committed / commit-limit
+   fields were sent as a *count of pages* instead of bytes — on this
+   machine ~25 GB of real commit read as "6.3 MB", and the ~27 GB limit
+   read as "6.6 MB". Both are now multiplied by the page size (4 KB).
+2. **The "Page file" row is no longer always zero (D98).** The wire's
+   `swap` object was never filled in, so a machine with a 10.8 GB page
+   file and 631 MB of live usage read "Page file 0 B". It now reads and
+   sums `Win32_PageFileUsage` (through the cached WMI client).
 
-## اصلاح‌های اندروید (APK)
+## Android fixes (APK)
 
-3. **پرامپت جفت‌سازی روی PC دیگر نسخهٔ قدیمی نمی‌گوید (D93).** جریانِ
-   جفت‌سازی کپیِ خودش از رشتهٔ نسخه را داشت (`1.0.1`) و در انتشار ۱٫۱٫۰
-   به‌روز نشده بود؛ PC هنگامِ تأیید، گوشی را «app 1.0.1» معرفی می‌کرد. حالا
-   همه‌جا یک ثابتِ مشترک (`esiAppVersion`) است و در تست‌ها پین شده.
-4. **لاگِ هر-فریمِ استریم دیگر در release هم سیل نمی‌شود (D94).** استریمِ
-   نمایشگر در حالت سالم هم در هر فریم یک خط لاگ می‌ریخت (~۹۰۰ خط در
-   دقیقه). حالا فقط وقتی لاگ می‌شود که هیچ فریمی نرسیده یا کاشی‌ای
-   رمزشده نخوانده — همان دو حالتی که این شمارنده برایشان ساخته شد.
-5. **برچسبِ هسته‌ها دیگر با بارِ برابر جابه‌جا نمی‌شود (D96).** برچسبِ هر ستون
-   با `indexOf(value)` پیدا می‌شد؛ دو هسته با بارِ یکسان هر دو برچسبِ
-   اولی را می‌گرفتند و یک ردیف می‌شد «0 1 0 3 4 1 6 7». حالا برچسب از
-   خودِ جایگاه است.
+3. **The PC's pairing prompt no longer reports an old version (D93).**
+   The pairing flow kept its own copy of the app version string
+   ("1.0.1") and the 1.1.0 release never updated it, so the PC
+   introduced the phone as "app 1.0.1" while running 1.1.0. Everything
+   now reads one shared constant (`esiAppVersion`), pinned in tests.
+4. **Per-frame stream logging is gone in release (D94).** A healthy
+   screen stream logged a line per frame (~900 lines/min). It now logs
+   only when no frames arrive or a tile fails to decode — the two cases
+   the counter was built for.
+5. **Core labels no longer shuffle when two cores share a load (D96).**
+   Each bar's label was found with `indexOf(value)`, so two equally
+   loaded cores both matched the first one and a row could read
+   "0 1 0 3 4 1 6 7". Labels now come from the bar's own index.
 
-## آزمون
+## Tests
 
-- سویتِ سی‌شارپ: ۴۷۴/۴۷۴ سبز.
-- سویتِ دارت: ۳۳۵/۳۳۵ سبز (پینِ نسخه و پینِ برچسبِ هسته‌ها اضافه شد).
-- بررسیِ نصب‌پذیریِ APK: ۹/۹.
-- روی دستگاه واقعی: جفت‌سازیِ تمیز روی بیلدِ release موفق، داشبورد با
-  اولین تپ باز شد، جفت‌سازی بعد از ری‌استارت کاملِ اپ ماند (D92 دوباره
-  بازتولید نشد؛ دنبالهٔ آن روی گوشیِ واقعی هم چک می‌شود).
+- C# suite: 474/474 green.
+- Dart suite: 335/335 green (new pins: version const, core labels).
+- APK installability checks: 9/9.
+- On a real device: fresh pairing on the release build succeeded, the
+  dashboard opened on the first tap, and pairing survived a full app
+  restart (D92 did not reproduce; it still gets a real-phone pass).
 
-## دانلود
+## Downloads
 
 - Windows: `ESI-RemotePC-Setup-1.1.1-x64.exe`
 - Android: `ESI-RemotePC-1.1.1.apk`
-
-معیارِ SHA-256 هر دو فایل در بخش «Assets» همین انتشار آمده است.
 
 ## SHA-256
 
